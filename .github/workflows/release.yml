@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the gem before anything is pushed
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: The version surfaces agree
+        run: |
+          gem install rouge --no-document
+          version="$(ruby -Ilib -e 'require "rouge-carve"; print RougeCarve::VERSION')"
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            [ "$version" = "$GITHUB_REF_NAME" ] \
+              || { echo "::error::VERSION is $version, tag is $GITHUB_REF_NAME"; exit 1; }
+          fi
+          grep -qE "^## \[?${version//./\\.}\]? - " CHANGELOG.md \
+            || { echo "::error::CHANGELOG.md has no dated section for $version"; exit 1; }
+
+      - name: Spec
+        run: |
+          gem install rspec --no-document
+          rspec -I lib -I spec
+
+      - name: Corpus gates
+        run: |
+          git clone --depth 1 https://github.com/markup-carve/carve.git carve-spec
+          ruby script/corpus_check.rb carve-spec
+          ruby script/preservation_check.rb carve-spec
+          ruby script/parity_check.rb
+
+      - name: The gem carries the lexer, its entry and the demo
+        run: |
+          gem build rouge-carve.gemspec
+          listing="$(ruby -rrubygems/package -e 'puts Gem::Package.new(Dir["*.gem"].first).spec.files')"
+          for file in lib/rouge-carve.rb lib/rouge/lexers/carve.rb lib/rouge/demos/carve; do
+            printf '%s\n' "$listing" | grep -qx "$file" \
+              || { echo "::error::the gem is missing $file"; exit 1; }
+          done
+
+      - name: The built gem registers the lexer when required
+        run: |
+          gem install --local ./rouge-carve-*.gem --no-document
+          ruby -e 'require "rouge-carve"; abort "not registered" unless Rouge::Lexer.find("carve")'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-gem
+          path: rouge-carve-*.gem
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Push the verified gem to RubyGems
+    # A separate job that needs `verify`, so the push cannot start while a gate
+    # is failing and has nothing to push but the artifact that job produced.
+    needs: verify
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # `id-token: write` is required for the OIDC exchange and is never granted
+    # implicitly.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-gem
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      # Trusted publishing: GitHub mints a short-lived token naming this
+      # repository and workflow, RubyGems exchanges it for a credential valid
+      # for minutes. No long-lived API key exists to leak.
+      - name: Exchange the OIDC token for a RubyGems credential
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+
+      - name: Push gem to RubyGems
+        run: gem push rouge-carve-*.gem

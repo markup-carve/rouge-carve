@@ -37,7 +37,7 @@ jobs:
         run: rspec -I lib -I spec
 
   corpus:
-    name: No error token on the Carve corpus
+    name: Corpus gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,5 +51,11 @@ jobs:
         with:
           repository: markup-carve/carve
           path: carve-spec
-      - name: Lex every corpus document
+      - name: No error token
         run: ruby script/corpus_check.rb carve-spec
+
+      - name: Every document round-trips
+        run: ruby script/preservation_check.rb carve-spec
+
+      - name: Construct parity with the sibling grammars
+        run: ruby script/parity_check.rb
