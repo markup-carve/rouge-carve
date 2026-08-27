@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+*.rb   text
+*.md   text
+*.crv  text
+
+# Keep everything that is not needed to USE the gem out of the dist tarball.
+/spec/            export-ignore
+/.github/         export-ignore
+/.gitignore       export-ignore
+/.gitattributes   export-ignore
+/.editorconfig    export-ignore
+/.rspec           export-ignore
+/Gemfile          export-ignore
+/Rakefile         export-ignore

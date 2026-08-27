@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  spec:
+    name: "Ruby ${{ matrix.ruby }} / Rouge ${{ matrix.rouge }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the gemspec claims, the current release, and the version
+        # GitLab pins - a lexer that only works on one of them is not portable.
+        ruby: ['2.7', '3.2', '3.4']
+        rouge: ['~> 4.0', '~> 5.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      - name: Install
+        run: |
+          gem install rspec rake --no-document
+          gem install rouge --no-document --version "${{ matrix.rouge }}"
+      - name: Spec
+        run: rspec -I lib -I spec
+
+  corpus:
+    name: No error token on the Carve corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - name: Install
+        run: gem install rouge --no-document
+      - name: Check out the corpus
+        uses: actions/checkout@v4
+        with:
+          repository: markup-carve/carve
+          path: carve-spec
+      - name: Lex every corpus document
+        run: ruby script/corpus_check.rb carve-spec

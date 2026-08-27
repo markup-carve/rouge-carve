@@ -1,0 +1,35 @@
+---
+title: Carve
+---
+
+{#intro}
+# Styling a document
+
+Carve swaps the delimiters Markdown got wrong: *bold* is one asterisk,
+/italic/ is a slash, and _underline_ finally has a spelling of its own.
+Sub and sup are braced-only, so H{,2,}O and E = mc{^2^} are unambiguous.
+
+{.lead}
+An attribute line binds an id, classes and `data-*` to the block below it.
+
+- A bullet, with `code` and a [link](https://markup-carve.github.io/carve/)
+- A task item is marked inline
+- [x] and it carries its own state
+
+::: note "Containers are core syntax"
+A word with no registered handler renders as a generic div, which is what
+makes a whole family of constructs possible without touching the parser.
+:::
+
+``` ruby "example.rb"
+def greet(name) = "Hello, #{name}!"
+```
+
+|= Engine   |= Status |
+| carve-js   | shipped |
+| carve-rs   | shipped |
+
+^ Table 1: the reference implementations.
+
+See </#intro> for the opening, cite [@knuth1984] for the argument, and
+%% this trailing comment never reaches the output.
