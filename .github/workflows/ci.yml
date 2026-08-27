@@ -19,6 +19,11 @@ jobs:
         # GitLab pins - a lexer that only works on one of them is not portable.
         ruby: ['2.7', '3.2', '3.4']
         rouge: ['~> 4.0', '~> 5.0']
+        exclude:
+          # Rouge 5 requires Ruby >= 3.0, so this pair cannot be installed at
+          # all. Ruby 2.7 is still covered, against Rouge 4.
+          - ruby: '2.7'
+            rouge: '~> 5.0'
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
