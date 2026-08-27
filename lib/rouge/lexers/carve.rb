@@ -128,12 +128,12 @@ module Rouge
 
         # A comment fence (%%% or longer) versus a one-line comment. The fence
         # has to be tried first: %%% also matches the one-line form.
-        rule %r/^#{MARGIN}(%%%+)([^\n]*)(\n)/ do
-          groups Comment::Preproc, Comment, Text
+        rule %r/^(#{MARGIN})(%%%+)([^\n]*)(\n)/ do
+          groups Text, Comment::Preproc, Comment, Text
           push :commentfence
         end
-        rule %r/^#{MARGIN}(%%)([^\n]*)$/ do
-          groups Comment::Preproc, Comment
+        rule %r/^(#{MARGIN})(%%)([^\n]*)$/ do
+          groups Text, Comment::Preproc, Comment
         end
 
         # A raw block: the `=FORMAT` info string routes the payload to that
@@ -267,8 +267,8 @@ module Rouge
       end
 
       state :commentfence do
-        rule %r/^[ \t]*(%%%+)([ \t]*)$/ do
-          groups Comment::Preproc, Text
+        rule %r/^([ \t]*)(%%%+)([ \t]*)$/ do
+          groups Text, Comment::Preproc, Text
           pop!
         end
         rule %r/\n/, Comment

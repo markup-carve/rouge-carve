@@ -210,6 +210,38 @@ RSpec.describe Rouge::Lexers::Carve do
     end
   end
 
+  # Rouge's own plugin template names this the property worth testing: a lexer
+  # that drops or duplicates a character is broken in a way no scope check sees.
+  describe 'input preservation' do
+    def round_trips?(source)
+      out = +''
+      described_class.new.lex(source) { |_, value| out << value }
+      out == source
+    end
+
+    it 'reproduces every construct exactly' do
+      File.read(File.expand_path('../lib/rouge/demos/carve', __dir__)).then do |demo|
+        expect(round_trips?(demo)).to be true
+      end
+    end
+
+    # The margin was dropped here: the rule consumed it without capturing it, so
+    # `groups` never emitted it.
+    it 'keeps the indent in front of an indented comment' do
+      expect(round_trips?("x\n  %% indented comment\ny\n")).to be true
+      expect(round_trips?("- - a\n %% c\n b\n")).to be true
+    end
+
+    it 'keeps the indent on both fences of an indented comment block' do
+      expect(round_trips?("  %%%\n    body\n  %%%\n")).to be true
+    end
+
+    it 'reproduces a document that mixes every block kind' do
+      source = File.read(File.expand_path('sample', __dir__))
+      expect(round_trips?(source)).to be true
+    end
+  end
+
   # A lexer that emits Error is telling the reader its own rules ran out.
   describe 'robustness' do
     it 'never emits an error token on any construct in the demo' do

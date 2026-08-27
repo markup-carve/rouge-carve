@@ -1,0 +1,79 @@
+---
+title: Visual sample
+author: markup-carve
+---
+
+{#intro .lead}
+# Every construct, once
+
+Carve swaps the delimiters Markdown got backwards: *strong*, /emphasis/,
+_underline_, ~strikethrough~ and =highlight=. Sub and sup are braced-only, so
+H{,2,}O and mc{^2^} cannot be mistaken for punctuation. Forced spellings reach
+inside a word: my{_path_}name.
+
+Inline: `code`, !`literal code`, $`e^{i\pi}+1=0`, [a link](https://example.com),
+![an image](logo.svg), <https://autolink.example>, </#intro>, [ref][],
+[@knuth1984], :kbd[Ctrl], :smile:, @mention, #tag, and a footnote[^note].
+
+An inline footnote ^[carried right here] and editorial marks: {+inserted+},
+{-deleted-}, {~old~>new~}, {#a reviewer note#}. Typography: -> <- --> <=> ...
+and an em dash --- mid-sentence. Escapes hold: \*not strong\*.
+
+## Blocks
+
+> A blockquote, which can carry /emphasis/ too.
+> ^ Attribution
+
+- A bullet
+- [x] A completed task
+- [ ] An open one
+  - A nested item
+1. An ordered item
+a. An alphabetic one
+i. A roman one
+
+:: A definition term
+:  Its description.
+
+::: note "A container with a title"
+Containers take a word the engine may not know, which is the whole point.
+:::
+
+::: |
+A layout container.
+:::
+
+{.striped}
+|= Left |=> Right |=~ Center |
+| a     | b       | c        |
+| d     | e       | f        |{.ok}
+
+^ Table 1: a caption that numbers itself.
+
+``` ruby "example.rb" [tab]
+def greet(name)
+  "Hello, #{name}!"     # <1>
+end
+```
+
+````
+A wider fence, holding a ``` line that is content rather than a closer.
+````
+
+```=html
+<b>Raw output, routed to one format.</b>
+```
+
+%% A trailing comment.
+
+%%%
+A comment fence, whose body never reaches the output.
+%%%
+
+  %% An indented comment, whose margin has to survive the lexer.
+
+---
+
+[ref]: https://example.com "A link reference"
+[^note]: The footnote body.
+*[HTML]: HyperText Markup Language
