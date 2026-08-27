@@ -72,8 +72,11 @@ jobs:
     needs: verify
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # `id-token: write` is required for the OIDC exchange and is never granted
+    # implicitly.
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -83,18 +86,13 @@ jobs:
         with:
           ruby-version: '3.2'
 
-      # Only that a key EXISTS. A RubyGems key is scoped, and a push-only key is
-      # forbidden from reading the profile - so probing `profile/me.json` fails
-      # on exactly the key this job wants. `gem push` is the only honest test of
-      # push permission, and it reports its own failure clearly.
-      - name: A RubyGems credential is configured
-        env:
-          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
-        run: |
-          [ -n "$GEM_HOST_API_KEY" ] \
-            || { echo "::error::RUBYGEMS_API_KEY is not configured"; exit 1; }
+      # Trusted publishing, for the reason carve-rb uses it: the account requires
+      # MFA on API pushes, so a long-lived key cannot publish unattended - it
+      # asks for an OTP nobody is there to type. GitHub mints a short-lived
+      # token naming this repository and workflow, RubyGems exchanges it for a
+      # credential valid for minutes, and no OTP is involved.
+      - name: Exchange the OIDC token for a RubyGems credential
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: Push gem to RubyGems
-        env:
-          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
         run: gem push rouge-carve-*.gem
