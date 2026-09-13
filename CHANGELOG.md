@@ -3,9 +3,10 @@
 ## [Unreleased]
 
 - The reserved include directive `{{ path #section @key:value }}` (PART 9
-  section 19, markup-carve/carve#291) is one `Name.Decorator` token. It used to
-  shred into the constructs its own selector is spelled with, so `#intro` in a
-  path was colored as a hashtag.
+  section 19, markup-carve/carve#291) is lexed BY PART: the path as
+  `Name.Namespace`, the selector as `Name.Label`, and each option as
+  `Name.Attribute` plus its value. It used to shred into the constructs its own
+  selector is spelled with, so `#intro` in a path was colored as a hashtag.
 
 ## [0.1.0] - 2026-08-27
 

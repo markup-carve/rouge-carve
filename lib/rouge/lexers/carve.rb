@@ -370,7 +370,14 @@ module Rouge
         # as a hashtag inside a path. After the verbatim family, so a directive
         # in a code span stays literal; before every other brace rule, none of
         # which can spell `{{`.
-        rule %r/\{\{[^{}\n]*\}\}/, Name::Decorator
+        # THE CLOSER IS IN THE LOOKAHEAD, so an unterminated `{{` never opens
+        # the state at all and stays the ordinary text the processor treats it
+        # as. Without it the opener scoped and only the newline rule below
+        # stopped the damage.
+        rule %r/(\{\{)(?=[ \t]+[^\n]*?\}\})([ \t]+)((?:"(?:\\\\.|[^"\\\\])*"|[^#@}\s"][^#@}\s]*))/ do
+          groups Punctuation, Text, Name::Namespace
+          push :includeparts
+        end
 
         # CriticMarkup substitution and comment, before the forced family:
         # `{~old~>new~}` also matches the forced-strike shape.
@@ -507,6 +514,26 @@ module Rouge
         rule %r/<-->|<==>|<=>|-->|<--|==>|<==|->|<-/, Operator
         rule %r/(?<!-)---(?!-)|(?<!-)--(?!-)/, Punctuation
         rule %r/\.\.\./, Punctuation
+      end
+
+      # The tail of an include directive: its selector, option slots, and
+      # anything else written there. Scoped BY PART - the opener rule is what
+      # keeps the tag and mention rules out, so painting one token buys nothing,
+      # and a reader wants the path to look like a path.
+      #
+      # A part that is neither a section nor an option stays plain text rather
+      # than being refused, matching the processor, which leaves a malformed
+      # directive alone. A newline pops: the directive requires its closer on
+      # the same line, so anything else is not one.
+      state :includeparts do
+        rule %r/[ \t]+/, Text
+        rule %r/\}\}/, Punctuation, :pop!
+        rule %r/#[A-Za-z_][\w-]*/, Name::Label
+        rule %r/(@[A-Za-z_][\w-]*)(:)([^\s}]+)/ do
+          groups Name::Attribute, Punctuation, Literal
+        end
+        rule %r/[^\s}]+/, Text
+        rule %r/\n/, Text, :pop!
       end
 
       state :inlinefootnote do
