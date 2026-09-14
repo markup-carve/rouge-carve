@@ -116,7 +116,6 @@ RSpec.describe Rouge::Lexers::Carve do
         ['Punctuation', '{{'],
         ['Text', ' '],
         ['Name.Namespace', 'ch.crv'],
-        ['Text', ' '],
         ['Name.Label', '#intro'],
         ['Text', ' '],
         ['Punctuation', '}}']
