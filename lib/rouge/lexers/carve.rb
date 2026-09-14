@@ -364,7 +364,7 @@ module Rouge
         # leaves it literal; a processor expands it only when a host supplies a
         # resolver.
         #
-        # ONE token, because its own selector is spelled with constructs this
+        # One directive rule, because its own selector is spelled with constructs this
         # lexer already knows: `#section` is the tag rule below and an option
         # slot is the mention rule, so without this `#intro` came out coloured
         # as a hashtag inside a path. After the verbatim family, so a directive
@@ -374,7 +374,7 @@ module Rouge
         # the state at all and stays the ordinary text the processor treats it
         # as. Without it the opener scoped and only the newline rule below
         # stopped the damage.
-        rule %r/(\{\{)(?=[ \t]+[^\n]*?\}\})([ \t]+)((?:"(?:\\\\.|[^"\\\\])*"|[^#@}\s"][^#@}\s]*))/ do
+        rule %r/(\{\{)(?=[ \t]+[^\n]*?[ \t]+\}\})([ \t]+)((?:"(?:\\.|[^"\\])*"|[^#@}\s"][^#@}\s]*))/ do
           groups Punctuation, Text, Name::Namespace
           push :includeparts
         end
@@ -533,6 +533,7 @@ module Rouge
           groups Name::Attribute, Punctuation, Literal
         end
         rule %r/[^\s}]+/, Text
+        rule %r/\}/, Text
         rule %r/\n/, Text, :pop!
       end
 
