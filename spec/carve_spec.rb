@@ -112,7 +112,7 @@ RSpec.describe Rouge::Lexers::Carve do
       # coloured as one inside a path before the directive had a rule of its
       # own (PART 9 section 19). It is a LABEL here - a selector into another
       # document - and the path reads as a path.
-      expect(lex('{{ ch.crv #intro }}')).to eq [
+      expect(lex('{{ ch.crv#intro }}')).to eq [
         ['Punctuation', '{{'],
         ['Text', ' '],
         ['Name.Namespace', 'ch.crv'],
