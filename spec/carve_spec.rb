@@ -107,6 +107,56 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(lex('{#id .cls key="v"}')).to eq [['Name.Attribute', '{#id .cls key="v"}']]
     end
 
+    it 'reads an include directive by part' do
+      # The selector is the point: `#intro` is genuinely tag syntax, and was
+      # coloured as one inside a path before the directive had a rule of its
+      # own (PART 9 section 19). It is a LABEL here - a selector into another
+      # document - and the path reads as a path.
+      expect(lex('{{ ch.crv#intro }}')).to eq [
+        ['Punctuation', '{{'],
+        ['Text', ' '],
+        ['Name.Namespace', 'ch.crv'],
+        ['Name.Label', '#intro'],
+        ['Text', ' '],
+        ['Punctuation', '}}']
+      ]
+      expect(lex('{{ "a b.crv" }}')).to eq [
+        ['Punctuation', '{{'],
+        ['Text', ' '],
+        ['Name.Namespace', '"a b.crv"'],
+        ['Text', ' '],
+        ['Punctuation', '}}']
+      ]
+    end
+
+    it 'reads an option slot as a name and a value' do
+      expect(lex('{{ ch.crv @shift:auto }}')).to eq [
+        ['Punctuation', '{{'],
+        ['Text', ' '],
+        ['Name.Namespace', 'ch.crv'],
+        ['Text', ' '],
+        ['Name.Attribute', '@shift'],
+        ['Punctuation', ':'],
+        ['Literal', 'auto'],
+        ['Text', ' '],
+        ['Punctuation', '}}']
+      ]
+    end
+
+    it 'leaves an unterminated directive alone' do
+      # The closer is required in the opener's lookahead, so a stray `{{` never
+      # opens the state and the rest of the line keeps its own markup.
+      expect(token_for('{{ unterminated *bold* here', '*')).to eq 'Punctuation'
+    end
+
+    it 'leaves an include directive in a code span verbatim' do
+      expect(lex('`{{ x.crv }}`')).to eq [
+        ['Punctuation', '`'],
+        ['Literal.String.Backtick', '{{ x.crv }}'],
+        ['Punctuation', '`']
+      ]
+    end
+
     it 'reads a mention and a tag as one token each, sigil included' do
       expect(token_for('hi @user', '@user')).to eq 'Name.Variable.Magic'
       expect(token_for('a #tag', '#tag')).to eq 'Name.Variable.Instance'
