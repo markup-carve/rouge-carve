@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] - 2026-09-21
 
 - The reserved include directive `{{ path #section @key:value }}` (PART 9
   section 19, markup-carve/carve#291) is lexed BY PART: the path as

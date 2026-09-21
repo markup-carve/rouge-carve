@@ -9,5 +9,5 @@ require_relative 'rouge/lexers/carve'
 # registers it, so `Rouge::Lexer.find('carve')` and
 # `Rouge::Lexer.guess(filename: 'x.crv')` work from that point on.
 module RougeCarve
-  VERSION = '0.1.0'
+  VERSION = '0.1.1'
 end
