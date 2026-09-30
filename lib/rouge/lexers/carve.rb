@@ -3,7 +3,8 @@
 
 module Rouge
   module Lexers
-    # Carve is a lightweight markup language for documents. Its inline
+    # Carve is a lightweight markup language for documents and the web. Its
+    # inline
     # delimiters deliberately differ from Markdown's, which is why lexing a
     # Carve document as Markdown produces actively WRONG output rather than
     # merely plain text:
@@ -48,7 +49,7 @@ module Rouge
     # Spec: https://markup-carve.github.io/carve/
     class Carve < RegexLexer
       title 'Carve'
-      desc 'Carve, a lightweight markup language for documents'
+      desc 'Carve, a lightweight markup language for documents and the web'
 
       tag 'carve'
       aliases 'crv'
