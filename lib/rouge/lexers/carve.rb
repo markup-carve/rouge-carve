@@ -278,6 +278,7 @@ module Rouge
 
       state :heading do
         rule %r/$/, Text, :pop!
+        mixin :lineverbatim
         mixin :inlinecontent
         rule PLAIN, Generic::Heading
         rule %r/[^\n]/, Generic::Heading
@@ -285,6 +286,7 @@ module Rouge
 
       state :quoteline do
         rule %r/$/, Text, :pop!
+        mixin :lineverbatim
         mixin :inlinecontent
         rule PLAIN, Generic::Emph
         rule %r/[^\n]/, Generic::Emph
@@ -292,6 +294,7 @@ module Rouge
 
       state :caption do
         rule %r/$/, Text, :pop!
+        mixin :lineverbatim
         mixin :inlinecontent
         rule PLAIN, Generic::Subheading
         rule %r/[^\n]/, Generic::Subheading
@@ -329,6 +332,18 @@ module Rouge
         mixin :inlinecontent
         rule %r/\n/, Text
         rule %r/./, Text
+      end
+
+      state :lineverbatim do
+        rule %r/(!)(`+)(?!`)((?:(?!\2(?!`))[^\n])*)(\2(?!`)|$)/ do
+          groups Operator, Punctuation, Literal, Punctuation
+        end
+        rule %r/(\$\$?)(`+)(?!`)((?:(?!\2(?!`))[^\n])*)(\2(?!`)|$)/ do
+          groups Operator, Punctuation, Str::Other, Punctuation
+        end
+        rule %r/(`+)(?!`)((?:(?!\1(?!`))[^\n])*)(\1(?!`)|$)/ do
+          groups Punctuation, Str::Backtick, Punctuation
+        end
       end
 
       state :inlinecontent do
