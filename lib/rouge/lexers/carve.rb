@@ -335,13 +335,13 @@ module Rouge
       end
 
       state :lineverbatim do
-        rule %r/(!)(`+)(?!`)((?:(?!\2(?!`))[^\n])*)(\2(?!`)|$)/ do
+        rule %r/(!)(`+)(?!`)((?:(?!(?<!`)\2(?!`))[^\n])*)((?<!`)\2(?!`)|$)/ do
           groups Operator, Punctuation, Literal, Punctuation
         end
-        rule %r/(\$\$?)(`+)(?!`)((?:(?!\2(?!`))[^\n])*)(\2(?!`)|$)/ do
+        rule %r/(\$\$?)(`+)(?!`)((?:(?!(?<!`)\2(?!`))[^\n])*)((?<!`)\2(?!`)|$)/ do
           groups Operator, Punctuation, Str::Other, Punctuation
         end
-        rule %r/(`+)(?!`)((?:(?!\1(?!`))[^\n])*)(\1(?!`)|$)/ do
+        rule %r/(`+)(?!`)((?:(?!(?<!`)\1(?!`))[^\n])*)((?<!`)\1(?!`)|$)/ do
           groups Punctuation, Str::Backtick, Punctuation
         end
       end

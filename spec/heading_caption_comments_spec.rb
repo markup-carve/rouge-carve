@@ -14,7 +14,7 @@ RSpec.describe Rouge::Lexers::Carve do
   end
 
   ['# a ', '> # a ', "![alt](x.png)\n^ cap ", "> ![alt](x.png)\n> ^ cap "].each do |prefix|
-    ['`x %% b` c', '``x %% b`` c', '!`x %% b` c', '$`x %% b` c', '`x %% b'].each do |body|
+    ['`x %% b` c', '``x %% b`` c', '!`x %% b` c', '$`x %% b` c', '`x %% b', '` x `` y %% hidden', '``x```y %% hidden'].each do |body|
       it "protects the percent run in #{prefix.inspect}#{body}" do
         source = prefix + body + "\n\nplain tail"
         expect(kind_at(source, '%%')).to start_with('Literal')
