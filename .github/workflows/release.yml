@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
 
+# Every job below carries a timeout-minutes bound, so a hung step fails in
+# minutes instead of running to GitHub's 360-minute default.
 jobs:
   verify:
     name: Verify the gem before anything is pushed
@@ -107,6 +109,7 @@ jobs:
     needs: verify
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: release
     # `id-token: write` is required for the OIDC exchange and is never granted
     # implicitly.
