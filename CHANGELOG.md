@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] - 2026-10-08
+
+- An include selector whose id starts with a digit is lexed as a selector. `{{ ch.crv #2024-plan }}` used to fall through to plain text, because the lexer required a letter or underscore first while the spec's `explicit_identifier` has admitted a leading digit since carve 0.1.8 (#15).
+
 ## [0.1.1] - 2026-09-21
 
 - The reserved include directive `{{ path #section @key:value }}` (PART 9
