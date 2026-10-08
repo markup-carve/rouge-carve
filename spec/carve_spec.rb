@@ -129,6 +129,19 @@ RSpec.describe Rouge::Lexers::Carve do
       ]
     end
 
+    # Since carve 0.1.8 the selector is `id_attribute`, whose
+    # `explicit_identifier` admits a leading ASCII digit.
+    {
+      'spaced' => '{{ ch.crv #2024-plan }}',
+      'adjacent' => '{{ ch.crv#2024-plan }}'
+    }.each do |spelling, source|
+      it "reads a digit-leading selector as a selector (#{spelling})" do
+        tokens = lex(source)
+        expect(tokens).to include ['Name.Namespace', 'ch.crv']
+        expect(tokens).to include ['Name.Label', '#2024-plan']
+      end
+    end
+
     it 'reads an option slot as a name and a value' do
       expect(lex('{{ ch.crv @shift:auto }}')).to eq [
         ['Punctuation', '{{'],
