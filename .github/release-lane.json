@@ -1,0 +1,17 @@
+{
+  "workflow": ".github/workflows/release-lane.yml",
+  "publisher": ".github/workflows/release.yml",
+  "publisher_environments": [
+    "release"
+  ],
+  "registries": {
+    "rubygems": "rouge-carve"
+  },
+  "assets": [],
+  "versions": [
+    {
+      "path": "lib/rouge-carve.rb",
+      "pattern": "VERSION\\s*=\\s*['\"]([^'\"]+)"
+    }
+  ]
+}
