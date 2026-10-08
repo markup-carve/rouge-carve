@@ -544,7 +544,7 @@ module Rouge
       state :includeparts do
         rule %r/[ \t]+/, Text
         rule %r/\}\}/, Punctuation, :pop!
-        rule %r/#[A-Za-z_][\w-]*/, Name::Label
+        rule %r/#[A-Za-z0-9_][\w-]*/, Name::Label
         rule %r/(@[A-Za-z_][\w-]*)(:)([^\s}]+)/ do
           groups Name::Attribute, Punctuation, Literal
         end
