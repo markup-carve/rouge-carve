@@ -5,6 +5,11 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, without v; leave empty for rehearsal
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,9 +39,9 @@ jobs:
         run: |
           gem install rouge --no-document
           version="$(ruby -Ilib -e 'require "rouge-carve"; print RougeCarve::VERSION')"
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            [ "$version" = "$GITHUB_REF_NAME" ] \
-              || { echo "::error::VERSION is $version, tag is $GITHUB_REF_NAME"; exit 1; }
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ -n "$RELEASE_VERSION" ]; then
+            [ "$version" = "$RELEASE_TAG" ] \
+              || { echo "::error::VERSION is $version, tag is $RELEASE_TAG"; exit 1; }
           fi
           grep -qE "^## \[?${version//./\\.}\]? - " CHANGELOG.md \
             || { echo "::error::CHANGELOG.md has no dated section for $version"; exit 1; }
@@ -51,22 +56,22 @@ jobs:
       # not a git ref, so addressing one by tag can match nothing, change
       # nothing and still exit 0.
       - name: A release draft for this tag exists and has notes
-        if: github.event_name != 'workflow_dispatch'
+        if: (github.event_name != 'workflow_dispatch' || inputs.version != '')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           release="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq "[.[] | select(.tag_name == \"$GITHUB_REF_NAME\")] | first")"
+            --jq "[.[] | select(.tag_name == \"$RELEASE_TAG\")] | first")"
           if [ -z "$release" ]; then
-            echo "::error::no release for $GITHUB_REF_NAME. Write the notes first:" \
-                 "gh release create $GITHUB_REF_NAME --draft --notes-file NOTES.md"
+            echo "::error::no release for $RELEASE_TAG. Write the notes first:" \
+                 "gh release create $RELEASE_TAG --draft --notes-file NOTES.md"
             echo "::error::if a draft DOES exist, this job could not see it -" \
                  "check that the job still declares contents: write"
             exit 1
           fi
           body="$(printf '%s' "$release" | jq -r '.body // ""' | tr -d '[:space:]')"
           [ -n "$body" ] \
-            || { echo "::error::the release for $GITHUB_REF_NAME has no notes"; exit 1; }
+            || { echo "::error::the release for $RELEASE_TAG has no notes"; exit 1; }
           printf '%s' "$release" | jq -r '"draft=\(.draft) tag=\(.tag_name)"'
 
       - name: Spec
@@ -107,7 +112,7 @@ jobs:
     # A separate job that needs `verify`, so the push cannot start while a gate
     # is failing and has nothing to push but the artifact that job produced.
     needs: verify
-    if: github.event_name != 'workflow_dispatch'
+    if: (github.event_name != 'workflow_dispatch' || inputs.version != '')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: release
@@ -135,20 +140,36 @@ jobs:
       - name: Exchange the OIDC token for a RubyGems credential
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
+      - name: Create the release tag after approval
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Version must be X.Y.Z"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            remote="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" | tail -1 | cut -f1)"
+            [ "$remote" = "$GITHUB_SHA" ] || { echo "::error::Existing tag points to another commit"; exit 1; }
+          else
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
       - name: Push gem to RubyGems
         run: gem push rouge-carve-*.gem
 
       # Publish the draft a human wrote. Addressed by ID with tag_name sent,
       # because omitting tag_name on a draft clears the tag to `untagged-...`.
       - name: Publish the release notes written for this tag
-        if: github.event_name != 'workflow_dispatch'
+        if: (github.event_name != 'workflow_dispatch' || inputs.version != '')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq "[.[] | select(.tag_name == \"$GITHUB_REF_NAME\")] | first | .id // empty")"
-          [ -n "$id" ] || { echo "::error::the release for $GITHUB_REF_NAME vanished"; exit 1; }
+            --jq "[.[] | select(.tag_name == \"$RELEASE_TAG\")] | first | .id // empty")"
+          [ -n "$id" ] || { echo "::error::the release for $RELEASE_TAG vanished"; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/releases/$id" -X PATCH \
-            -f tag_name="$GITHUB_REF_NAME" -F draft=false >/dev/null
+            -f tag_name="$RELEASE_TAG" -F draft=false >/dev/null
           gh api "repos/$GITHUB_REPOSITORY/releases/$id" \
             --jq 'if .draft then error("release is still a draft") else "published \(.tag_name)" end'
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_TAG: ${{ inputs.version != '' && format('{0}', inputs.version) || github.ref_name }}
