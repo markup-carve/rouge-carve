@@ -14,6 +14,8 @@ Rouge::Lexer.find('carve')                    # => Rouge::Lexers::Carve
 Rouge::Lexer.guess(filename: 'notes.crv')     # => Rouge::Lexers::Carve
 ```
 
+It needs Rouge 3.30 or later and is tested against Rouge 3, 4 and 5.
+
 Requiring the gem registers the lexer. Anything that already highlights with
 Rouge - GitLab, Jekyll, Redcarpet, most Ruby static site generators - then
 handles `.crv` and `.carve` files, and ` ```carve ` fenced blocks, without

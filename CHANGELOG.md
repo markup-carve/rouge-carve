@@ -8,6 +8,12 @@
 - A `>` marks a quote only when a space or the line end follows it, so `>> x` is paragraph text and `> > x` nests, as in the engine.
 - A comment fence closes only on a `%` run of its own length, which may be followed by text. An opener with no such closer is a one-line comment, as in the engine.
 - A standalone attribute block no longer runs across a blank line.
+- Bare delimiters follow Carve's flanking rules, so `snake_case_name`, `/usr/local/bin`, `x=1 and y=2`, `2*3*4` and the text between `==>` arrows stay text.
+- Emphasis content is lexed inline: an escape, a code span, a link or another kind of emphasis inside a run keeps its own token, and `*a \* b*` closes where the engine closes it.
+- A list marker or a caption under a paragraph line stays text, as in the engine; headings, quotes, tables, containers and closed fences still interrupt it. A wrapped definition term keeps its definition.
+- A table row needs its closing pipe, `+` is no longer read as a bullet, and an alphabetic ordered marker is one letter or a roman numeral, so `Body.` is a word.
+- Lexing a long line of unclosed openers (`*a *a *a ...`, `{{ a {{ a ...`) is linear in its length; it used to be quadratic.
+- The gem now requires Rouge 3.30 or later. Rouge 3.0, which the old constraint admitted, cannot load the lexer.
 
 ## [0.1.3] - 2026-10-14
 

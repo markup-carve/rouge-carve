@@ -18,10 +18,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor the gemspec claims, the current release, and the version
-        # GitLab pins - a lexer that only works on one of them is not portable.
+        # The floor the gemspec claims (3.30), the version GitLab pins (4) and
+        # the current release - a lexer that only works on one of them is not
+        # portable.
         ruby: ['2.7', '3.2', '3.4']
-        rouge: ['~> 4.0', '~> 5.0']
+        rouge: ['~> 3.30', '~> 4.0', '~> 5.0']
         exclude:
           # Rouge 5 requires Ruby >= 3.0, so this pair cannot be installed at
           # all. Ruby 2.7 is still covered, against Rouge 4.

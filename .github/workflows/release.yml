@@ -87,7 +87,7 @@ jobs:
         run: |
           gem build rouge-carve.gemspec
           listing="$(ruby -rrubygems/package -e 'puts Gem::Package.new(Dir["*.gem"].first).spec.files')"
-          for file in lib/rouge-carve.rb lib/rouge/lexers/carve.rb lib/rouge/demos/carve; do
+          for file in lib/rouge-carve.rb lib/rouge-carve/version.rb lib/rouge/lexers/carve.rb lib/rouge/demos/carve; do
             printf '%s\n' "$listing" | grep -qx "$file" \
               || { echo "::error::the gem is missing $file"; exit 1; }
           done

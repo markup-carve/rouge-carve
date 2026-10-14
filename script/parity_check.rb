@@ -15,9 +15,18 @@ def scoped?(source)
   tokens(source).any? { |name, val| name != 'Text' && !val.strip.empty? }
 end
 
-# Whether +text+ carries a scope other than Text.
+# Whether any character of +text+ carries a scope other than Text. Checking
+# for one token that holds the whole of +text+ missed a span split across
+# several tokens, so `/usr/local/bin` painted as `/usr/` + `local/bin` passed.
 def scoped_text?(source, text)
-  tokens(source).any? { |name, val| name != 'Text' && val.include?(text) }
+  from = source.index(text) or raise "#{text.inspect} is not in #{source.inspect}"
+  to = from + text.length
+  at = 0
+  tokens(source).any? do |name, val|
+    start = at
+    at += val.length
+    name != 'Text' && start < to && at > from && !val[[from - start, 0].max...(to - start)].strip.empty?
+  end
 end
 
 CONSTRUCTS = {
@@ -54,6 +63,10 @@ NEGATIVES = {
   'a range is not strikethrough' => ['A range 10-20 here.', '10-20'],
   'a bare caret is not superscript' => ['x ^2^ y', '^2^'],
   'a bare comma is not subscript' => ['typo ,oops, happens', ',oops,'],
+  'an identifier is not underline' => ['call snake_case_name here', 'snake_case_name'],
+  'an assignment is not highlight' => ['x=1 and y=2', 'x=1 and y=2'],
+  'a product is not strong' => ['2*3*4', '2*3*4'],
+  'text between arrows is not highlight' => ['a ==> b ==> c', ' b '],
 }.freeze
 
 missing = CONSTRUCTS.reject { |_, src| scoped?(src) }

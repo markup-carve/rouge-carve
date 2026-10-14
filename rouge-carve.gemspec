@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'lib/rouge-carve'
+require_relative 'lib/rouge-carve/version'
 
 Gem::Specification.new do |spec|
   spec.name = 'rouge-carve'
@@ -29,5 +29,7 @@ Gem::Specification.new do |spec|
   spec.files = Dir['lib/**/*', 'README.md', 'CHANGELOG.md', 'LICENSE']
   spec.require_paths = ['lib']
 
-  spec.add_dependency 'rouge', '>= 3.0', '< 6.0'
+  # 3.30 is the oldest release CI tests. Older ones lack token types the lexer
+  # uses (Rouge 3.0 has no Name::Variable::Magic) and fail to load it.
+  spec.add_dependency 'rouge', '>= 3.30', '< 6.0'
 end
