@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'rouge'
+require_relative 'rouge-carve/version'
 require_relative 'rouge/lexers/carve'
 
 # A Rouge lexer for the Carve markup language.
@@ -9,5 +10,4 @@ require_relative 'rouge/lexers/carve'
 # registers it, so `Rouge::Lexer.find('carve')` and
 # `Rouge::Lexer.guess(filename: 'x.crv')` work from that point on.
 module RougeCarve
-  VERSION = '0.1.3'
 end
