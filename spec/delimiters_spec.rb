@@ -93,5 +93,16 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'keeps a link inside emphasis a link' do
       expect(kind_at('*see [t](/u) now*', '/u')).to eq 'Name.Tag'
     end
+
+    it 'does not open a run whose closer lies past the enclosing one' do
+      source = '*a /b* c/'
+      expect(kind_at(source, '/b')).to eq 'Generic.Strong'
+      expect(kind_at(source, ' c/')).to eq 'Text'
+      expect(kind_at('_a *b_ c*', '*b')).to eq 'Generic.Emph'
+    end
+
+    it 'still nests a run that closes inside the enclosing one' do
+      expect(kind_at('*a /b/ c*', '/b')).to eq 'Punctuation'
+    end
   end
 end

@@ -62,6 +62,31 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'ends an inline footnote at a blank line when its bracket was consumed' do
       expect(token_for("a ^[x `]`\n\n# H\n", 'H')).to eq 'Generic.Heading'
     end
+
+    it 'does not count a bracket inside a code span' do
+      source = "a ^[x `]`\n\n- item\n"
+      expect(kind_at(source, 'x')).to eq 'Text'
+      expect(token_for(source, '-')).to eq 'Punctuation'
+    end
+
+    it 'ends the search at a block that interrupts the paragraph' do
+      source = "a ^[unclosed\n# H\ntext]\n"
+      expect(kind_at(source, 'unclosed')).to eq 'Text'
+      expect(token_for(source, 'H')).to eq 'Generic.Heading'
+      expect(kind_at(":kbd[x\n> q]\n", 'x')).to eq 'Text'
+    end
+
+    it 'keeps a heading body on its line' do
+      source = "# a ^[x\ny]\n"
+      expect(kind_at(source, 'x')).to eq 'Generic.Heading'
+      expect(kind_at(source, 'y]')).to eq 'Text'
+    end
+
+    it 'ends a list item body at the next item' do
+      source = "- a ^[x\n- b]\n"
+      expect(kind_at(source, 'x')).to eq 'Text'
+      expect(kind_at(source, 'b]')).to eq 'Text'
+    end
   end
 
   describe 'blocks inside a blockquote' do
