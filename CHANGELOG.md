@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] - 2026-10-14
+
+0.1.2 was tagged without its `RougeCarve::VERSION` bump, so it never reached RubyGems. 0.1.3 is the first published release with its change.
+
+- An include selector whose id starts with a digit is lexed as a selector. `{{ ch.crv #2024-plan }}` used to fall through to plain text (#15, #16).
+
 ## [0.1.2] - 2026-10-08
 
 - An include selector whose id starts with a digit is lexed as a selector. `{{ ch.crv #2024-plan }}` used to fall through to plain text, because the lexer required a letter or underscore first while the spec's `explicit_identifier` has admitted a leading digit since carve 0.1.8 (#15).
