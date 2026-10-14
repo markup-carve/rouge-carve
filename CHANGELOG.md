@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- A footnote or abbreviation definition ends with its line. It used to turn the rest of the file into plain text, so no later heading, list or fence was recognized.
+- An inline footnote `^[` or extension `:name[` with no closing `]` in its paragraph stays text instead of swallowing the blocks after it.
+- A blockquote line can open a block: `> # Heading`, `> - item`, and a fence whose lines carry the `>` prefix.
+- A `>` marks a quote only when a space or the line end follows it, so `>> x` is paragraph text and `> > x` nests, as in the engine.
+- A comment fence closes only on a `%` run of its own length, which may be followed by text. An opener with no such closer is a one-line comment, as in the engine.
+- A standalone attribute block no longer runs across a blank line.
+
 ## [0.1.3] - 2026-10-14
 
 0.1.2 was tagged without its `RougeCarve::VERSION` bump, so it never reached RubyGems. 0.1.3 is the first published release with its change.

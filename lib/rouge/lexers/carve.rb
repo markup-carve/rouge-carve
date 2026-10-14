@@ -73,17 +73,25 @@ module Rouge
         )*\}
       /x.freeze
 
-      # The same block as a STANDALONE ATTRIBUTE LINE, which may span lines.
-      # The inline form deliberately cannot, because an unclosed inline `{`
-      # would otherwise swallow the rest of the document.
+      # The same block as a STANDALONE ATTRIBUTE LINE, which may span lines
+      # but not a blank one: a blank line ends the block it would attach to.
+      # The inline form cannot span lines at all, because an unclosed inline
+      # `{` would otherwise swallow the rest of the document.
+      LINE_BREAK = '\n(?![ \t]*(?:\n|\z))'
       ATTRS_LINE = %r/
         \{(?=[.:}'"]|\#[\w-]+[\s}]|[A-Za-z][\w-]*(?:[=\s}]|$))(?:
-          "(?:[^"\\]|\\.)*"
-          |'(?:[^'\\]|\\.)*'
-          |\{[^{}]*\}
-          |[^{}]
+          "(?:[^"\\\n]|\\.|#{LINE_BREAK})*"
+          |'(?:[^'\\\n]|\\.|#{LINE_BREAK})*'
+          |\{(?:[^{}\n]|#{LINE_BREAK})*\}
+          |[^{}\n]
+          |#{LINE_BREAK}
         )*\}
       /x.freeze
+
+      # The prefix of a line inside a blockquote, nested markers included.
+      # Each `>` needs a space or the line end after it: `>foo` and `>> x`
+      # are paragraph text.
+      QUOTE_PREFIX = /(?:[ \t]*>(?=[ \t]|$))+[ \t]?/.freeze
 
       # A bracketed label that may itself contain three levels of brackets. A
       # regex cannot match arbitrarily balanced brackets, and a link label in
@@ -119,6 +127,144 @@ module Rouge
       # ------------------------------------------------------------------
       # Block level
       # ------------------------------------------------------------------
+
+      # The openers a blockquote marker can introduce as well as a line start.
+      # They are written once and instantiated twice: anchored at a line start
+      # for the document, and unanchored for the rest of a line after `>`,
+      # where the scanner already sits where the block would begin. Each one
+      # enters its state through #open_block, which knows which of the two it
+      # is running in.
+      def self.block_openers(bol)
+        proc do
+          # A raw block: the `=FORMAT` info string routes the payload to that
+          # output format verbatim. Emitted as one token including the `=`,
+          # because the format word without its sigil is not the construct.
+          # The payload is never a language, so it is never delegated.
+          rule %r/#{bol}(#{MARGIN})(`{3,}|~{3,})([ \t]*)(=[a-zA-Z][\w+.-]*)([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Keyword::Type
+            token Text, m[5]
+            push_fence(m[2], nil)
+          end
+
+          # A code fence. The first word of the info string names a language,
+          # and a lexer for it highlights the payload - the one place this
+          # lexer looks past Carve, because a reader of a `.crv` file expects
+          # an embedded PHP sample to look like PHP.
+          rule %r/#{bol}(#{MARGIN})(`{3,}|~{3,})([ \t]*)([a-zA-Z][\w+#.-]*)?([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Name::Builtin
+            lex_info_string(m[5])
+            push_fence(m[2], m[4])
+          end
+
+          # Container divs. A reserved kind word (note, tip, figure, ...)
+          # names a known container; `:::` followed by `|` is the layout form.
+          rule %r/#{bol}(#{MARGIN})(:{3,})([ \t]*)(\|)/ do
+            groups Text, Punctuation, Text, Operator
+            open_block
+          end
+          rule %r/#{bol}(#{MARGIN})(:{3,})([ \t]*)([a-zA-Z][\w-]*)?([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Keyword::Namespace
+            lex_info_string(m[5])
+            open_block
+          end
+
+          # A caption line attaches to the block above or below it.
+          rule %r/#{bol}(#{MARGIN})(\^)([ \t]+)/ do
+            groups Text, Punctuation, Text
+            open_block :caption
+          end
+
+          # Headings. Carve has no setext form, so a `#` run is the only
+          # spelling and a trailing `{...}` is NOT an attribute block here.
+          rule %r/#{bol}(#{MARGIN})(\#{1,6})([ \t]+)/ do
+            groups Text, Punctuation, Text
+            open_block :heading
+          end
+
+          # Thematic breaks, before the list rules so `---` is not a bullet.
+          rule %r/#{bol}#{MARGIN}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/ do
+            token Punctuation
+            open_block
+          end
+
+          # Definition markers: footnote, link reference, abbreviation. The
+          # separator after the colon must START WITH A LITERAL SPACE - a
+          # tab-first separator makes the line an ordinary paragraph. Each
+          # definition ends with its line.
+          rule %r/#{bol}(#{MARGIN})(\[\^)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Label, Punctuation, Text
+            open_block :defline
+          end
+          rule %r/#{bol}(#{MARGIN})(\*\[)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Entity, Punctuation, Text
+            open_block :defline
+          end
+          rule %r/#{bol}(#{MARGIN})(\[)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Label, Punctuation, Text
+            open_block :linkdest
+          end
+
+          # A definition-list term (`::`) and its definition (`:`).
+          rule %r/#{bol}(#{MARGIN})(::)([ \t]+)/ do
+            groups Text, Punctuation, Text
+            open_block :heading
+          end
+          rule %r/#{bol}(#{MARGIN})(:)(?=[ \t])/ do
+            groups Text, Punctuation
+            open_block
+          end
+
+          # A blockquote marker must be followed by a space or end the line;
+          # `>foo` and `>> x` are paragraphs, and `> > x` nests. What follows
+          # a marker may open a block of its own, so the openers are tried
+          # again there.
+          rule %r/#{bol}(#{MARGIN})(>)(?=[ \t]|$)/ do
+            groups Text, Punctuation
+            state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
+          end
+
+          # Task items before plain bullets, so the state marker is its own
+          # token. The state is any single character, not only a space or an
+          # x: `[>]` is deferred and `[-]` is dropped.
+          rule %r/#{bol}(#{MARGIN})((?:[-*+]|\d+[.)]|[A-Za-z]+[.)])(?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])/ do
+            groups Text, Punctuation, Text, Name::Constant
+            open_block
+          end
+
+          # Bullets. A run of markers on one line opens nested lists at once
+          # (`- - A`), and attributes may be glued straight onto the marker.
+          rule %r/#{bol}(#{MARGIN})((?:[-*+][ \t]+)*[-*+](?:#{ATTRS})?)(?=[ \t]|$)/ do
+            groups Text, Punctuation
+            open_block
+          end
+
+          # Ordered markers: numeric, alphabetic, roman, and the bare `.` that
+          # continues the enclosing sequence.
+          rule %r/#{bol}(#{MARGIN})((?:\d+|[A-Za-z]+)[.)](?:#{ATTRS})?)(?=[ \t]|$)/ do
+            groups Text, Num::Integer
+            open_block
+          end
+          rule %r/#{bol}(#{MARGIN})(\.(?:#{ATTRS})?)(?=[ \t]|$)/ do
+            groups Text, Num::Integer
+            open_block
+          end
+
+          # Tables. The header marker, the alignment run and the separator row
+          # are their own tokens; cell content is lexed inline.
+          rule %r/#{bol}(#{MARGIN})(\|=[<>^v~]*)/ do
+            groups Text, Operator
+            open_block :tablerow
+          end
+          rule %r/#{bol}(#{MARGIN})(\|)/ do
+            groups Text, Punctuation
+            open_block :tablerow
+          end
+        end
+      end
+
+      state(:blockopeners, &block_openers('^'))
+      state(:quoteopeners, &block_openers(''))
+
       state :block do
         # Front matter, only at the very start of the document. \A is what
         # keeps a `---yaml` line mid-document from opening one.
@@ -128,127 +274,37 @@ module Rouge
         end
 
         # A comment fence (%%% or longer) versus a one-line comment. The fence
-        # has to be tried first: %%% also matches the one-line form.
-        rule %r/^(#{MARGIN})(%%%+)([^\n]*)(\n)/ do
+        # has to be tried first: %%% also matches the one-line form. Only a
+        # run of the SAME length closes it, so the width is closed over the
+        # way #push_fence does it, and an opener with no such closer below it
+        # is the one-line form. Text after either run is part of the comment.
+        rule %r/^(#{MARGIN})(%%%+)([^\n]*)(\n)/ do |m|
+          closer = %r/^([ \t]*)(%{#{m[2].length}})(?!%)([^\n]*)$/
+          unless closer_below?(closer, m[2].length)
+            # The tokens of the one-line rule below. Rouge 3 has no
+            # fallthrough! to hand the line on to it.
+            token Text, m[1]
+            token Comment::Preproc, '%%'
+            token Comment, m[2][2..] + m[3]
+            token Text, m[4]
+            next
+          end
+
           groups Text, Comment::Preproc, Comment, Text
-          push :commentfence
+          push do
+            rule closer do
+              groups Text, Comment::Preproc, Comment
+              pop!
+            end
+            rule %r/\n/, Comment
+            rule %r/[^\n]+\n?/, Comment
+          end
         end
         rule %r/^(#{MARGIN})(%%)([^\n]*)$/ do
           groups Text, Comment::Preproc, Comment
         end
 
-        # A raw block: the `=FORMAT` info string routes the payload to that
-        # output format verbatim. Emitted as one token including the `=`,
-        # because the format word without its sigil is not the construct. The
-        # payload is never a language, so it is never delegated.
-        rule %r/^(#{MARGIN})(`{3,}|~{3,})([ \t]*)(=[a-zA-Z][\w+.-]*)([^\n]*)/ do |m|
-          groups Text, Punctuation, Text, Keyword::Type
-          token Text, m[5]
-          push_fence(m[2], nil)
-        end
-
-        # A code fence. The first word of the info string names a language, and
-        # a lexer for it highlights the payload - the one place this lexer
-        # looks past Carve, because a reader of a `.crv` file expects an
-        # embedded PHP sample to look like PHP.
-        rule %r/^(#{MARGIN})(`{3,}|~{3,})([ \t]*)([a-zA-Z][\w+#.-]*)?([^\n]*)/ do |m|
-          groups Text, Punctuation, Text, Name::Builtin
-          lex_info_string(m[5])
-          push_fence(m[2], m[4])
-        end
-
-        # Container divs. A reserved kind word (note, tip, figure, ...) names a
-        # known container; `:::` followed by `|` is the layout form.
-        rule %r/^(#{MARGIN})(:{3,})([ \t]*)(\|)/ do
-          groups Text, Punctuation, Text, Operator
-        end
-        rule %r/^(#{MARGIN})(:{3,})([ \t]*)([a-zA-Z][\w-]*)?([^\n]*)/ do |m|
-          groups Text, Punctuation, Text, Keyword::Namespace
-          lex_info_string(m[5])
-        end
-
-        # A caption line attaches to the block above or below it.
-        rule %r/^(#{MARGIN})(\^)([ \t]+)/ do
-          groups Text, Punctuation, Text
-          push :caption
-        end
-
-        # Headings. Carve has no setext form, so a `#` run is the only spelling
-        # and a trailing `{...}` is NOT an attribute block here.
-        rule %r/^(#{MARGIN})(\#{1,6})([ \t]+)/ do
-          groups Text, Punctuation, Text
-          push :heading
-        end
-
-        # Thematic breaks, before the list rules so `---` is not a bullet.
-        rule %r/^#{MARGIN}(?:\*[ \t]*){3,}$/, Punctuation
-        rule %r/^#{MARGIN}(?:-[ \t]*){3,}$/, Punctuation
-        rule %r/^#{MARGIN}(?:_[ \t]*){3,}$/, Punctuation
-
-        # Definition markers: footnote, link reference, abbreviation. The
-        # separator after the colon must START WITH A LITERAL SPACE - a
-        # tab-first separator makes the line an ordinary paragraph.
-        rule %r/^(#{MARGIN})(\[\^)([^\]\n]+)(\]:)( )/ do
-          groups Text, Punctuation, Name::Label, Punctuation, Text
-          push :inline
-        end
-        rule %r/^(#{MARGIN})(\*\[)([^\]\n]+)(\]:)( )/ do
-          groups Text, Punctuation, Name::Entity, Punctuation, Text
-          push :inline
-        end
-        rule %r/^(#{MARGIN})(\[)([^\]\n]+)(\]:)( )/ do
-          groups Text, Punctuation, Name::Label, Punctuation, Text
-          push :linkdest
-        end
-
-        # A definition-list term (`::`) and its definition (`:`).
-        rule %r/^(#{MARGIN})(::)([ \t]+)/ do
-          groups Text, Punctuation, Text
-          push :heading
-        end
-        rule %r/^(#{MARGIN})(:)(?=[ \t])/ do
-          groups Text, Punctuation
-        end
-
-        # A blockquote marker must be followed by a space or end the line;
-        # `>foo` is a paragraph.
-        rule %r/^(#{MARGIN})(>+)(?=[ \t]|$)/ do
-          groups Text, Punctuation
-          push :quoteline
-        end
-
-        # Task items before plain bullets, so the state marker is its own
-        # token. The state is any single character, not only a space or an x:
-        # `[>]` is deferred and `[-]` is dropped.
-        rule %r/^(#{MARGIN})((?:[-*+]|\d+[.)]|[A-Za-z]+[.)])(?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])/ do
-          groups Text, Punctuation, Text, Name::Constant
-        end
-
-        # Bullets. A run of markers on one line opens nested lists at once
-        # (`- - A`), and attributes may be glued straight onto the marker.
-        rule %r/^(#{MARGIN})((?:[-*+][ \t]+)*[-*+](?:#{ATTRS})?)(?=[ \t]|$)/ do
-          groups Text, Punctuation
-        end
-
-        # Ordered markers: numeric, alphabetic, roman, and the bare `.` that
-        # continues the enclosing sequence.
-        rule %r/^(#{MARGIN})((?:\d+|[A-Za-z]+)[.)](?:#{ATTRS})?)(?=[ \t]|$)/ do
-          groups Text, Num::Integer
-        end
-        rule %r/^(#{MARGIN})(\.(?:#{ATTRS})?)(?=[ \t]|$)/ do
-          groups Text, Num::Integer
-        end
-
-        # Tables. The header marker, the alignment run and the separator row
-        # are their own tokens; cell content is lexed inline.
-        rule %r/^(#{MARGIN})(\|=[<>^v~]*)/ do
-          groups Text, Operator
-          push :tablerow
-        end
-        rule %r/^(#{MARGIN})(\|)/ do
-          groups Text, Punctuation
-          push :tablerow
-        end
+        mixin :blockopeners
 
         # A standalone attribute block, which may span lines.
         rule %r/^(#{MARGIN})(#{ATTRS_LINE})/ do
@@ -256,6 +312,12 @@ module Rouge
         end
 
         mixin :inline
+      end
+
+      # Right after a blockquote marker: a block opener, or quoted text.
+      state :quotestart do
+        mixin :quoteopeners
+        rule(//) { goto :quoteline }
       end
 
       state :frontmatter do
@@ -267,13 +329,11 @@ module Rouge
         rule %r/[^\n]+\n?/, Comment::Special
       end
 
-      state :commentfence do
-        rule %r/^([ \t]*)(%%%+)([ \t]*)$/ do
-          groups Text, Comment::Preproc, Text
-          pop!
-        end
-        rule %r/\n/, Comment
-        rule %r/[^\n]+\n?/, Comment
+      state :defline do
+        rule %r/$/, Text, :pop!
+        mixin :inlinecontent
+        rule PLAIN, Text
+        rule %r/[^\n]/, Text
       end
 
       state :heading do
@@ -446,7 +506,16 @@ module Rouge
         end
 
         # An inline footnote carries content; a reference carries a label.
-        rule %r/\^\[/, Punctuation, :inlinefootnote
+        # Both bracketed bodies need a closing `]` before the paragraph ends;
+        # an opener without one is text, as it is in the engine.
+        rule %r/\^\[/ do
+          if bracket_ahead?
+            token Punctuation
+            push :inlinefootnote
+          else
+            token plain_token
+          end
+        end
         rule %r/(\[\^)([^\]\n]+)(\])/ do
           groups Punctuation, Name::Label, Punctuation
         end
@@ -484,8 +553,12 @@ module Rouge
 
         # The `:name[...]` extension form.
         rule %r/(:)([a-zA-Z][\w-]*)(\[)/ do
-          groups Punctuation, Name::Function, Punctuation
-          push :rolebody
+          if bracket_ahead?
+            groups Punctuation, Name::Function, Punctuation
+            push :rolebody
+          else
+            token plain_token
+          end
         end
 
         # A code callout marker, and a symbol shortcode - whose name may start
@@ -553,8 +626,11 @@ module Rouge
         rule %r/\n/, Text, :pop!
       end
 
+      # Both bodies end at their bracket, or at the end of the paragraph when
+      # a construct inside consumed the bracket the opener saw.
       state :inlinefootnote do
         rule %r/\]/, Punctuation, :pop!
+        rule %r/\n(?=[ \t]*(?:\n|\z))/, Text, :pop!
         mixin :inlinecontent
         rule PLAIN_NO_BRACKET, Generic::Emph
         rule %r/[^\]\n]/, Generic::Emph
@@ -563,6 +639,7 @@ module Rouge
 
       state :rolebody do
         rule %r/\]/, Punctuation, :pop!
+        rule %r/\n(?=[ \t]*(?:\n|\z))/, Text, :pop!
         mixin :inlinecontent
         rule PLAIN_NO_BRACKET, Name::Function
         rule %r/[^\]\n]/, Name::Function
@@ -570,6 +647,62 @@ module Rouge
       end
 
       private
+
+      # The token a state gives a character that opens nothing.
+      PLAIN_TOKENS = {
+        heading: Generic::Heading, quoteline: Generic::Emph,
+        caption: Generic::Subheading, inlinefootnote: Generic::Emph,
+        rolebody: Name::Function
+      }.freeze
+
+      def plain_token
+        PLAIN_TOKENS.fetch(state.name, Text)
+      end
+
+      # Whether an unescaped `]` follows before the paragraph ends. The
+      # brackets of one paragraph are found in one pass and reused, so a run
+      # of unclosed openers does not rescan the paragraph once each.
+      def bracket_ahead?
+        stream = @current_stream
+        pos = stream.charpos
+        unless @brackets_for.equal?(stream) && pos < @brackets_end
+          text = stream.string
+          @brackets_for = stream
+          @brackets_end = text.index(/\n[ \t]*(?:\n|\z)/, pos) || text.length
+          @brackets = []
+          text[pos...@brackets_end].scan(/\\.|\]/m) do |hit|
+            @brackets << pos + Regexp.last_match.begin(0) if hit == ']'
+          end
+        end
+        !@brackets.bsearch { |at| at >= pos }.nil?
+      end
+
+      # Whether +closer+ matches a line below the current position. A miss
+      # is remembered per +key+, because every later opener of the same kind
+      # would miss too - without that, a run of unclosed openers rescans the
+      # rest of the document once each.
+      def closer_below?(closer, key)
+        stream = @current_stream
+        @closer_misses = {} unless @closer_misses_for.equal?(stream)
+        @closer_misses_for = stream
+        return false if @closer_misses[key]
+
+        found = stream.string.index(closer, stream.charpos)
+        @closer_misses[key] = true unless found
+        !found.nil?
+      end
+
+      # Enter the state of a block whose opener just matched, or none for an
+      # opener that is a single token. After a blockquote marker the opener
+      # replaces the quote's start state, and a single-token opener hands the
+      # rest of the line to quoted text.
+      def open_block(name = nil)
+        if state?(:quotestart)
+          goto(name || :quoteline)
+        elsif name
+          push name
+        end
+      end
 
       # Lex the tail of a fence or container opener line without leaving the
       # current state: a quoted title, a bracketed label and an attribute
@@ -606,6 +739,8 @@ module Rouge
         sublexer = fence_lexer(language)
         sublexer&.reset!
 
+        return push_quoted_fence(char, width, sublexer) if state?(:quotestart)
+
         push do
           rule closer, Punctuation, :pop!
           if sublexer
@@ -621,6 +756,35 @@ module Rouge
           else
             # Carve's own callout marker, which only survives where no
             # embedded language owns the payload.
+            rule %r/<\d+>/, Name::Constant
+            rule %r/[^\n<]+|<|\n/, Str::Backtick
+          end
+        end
+      end
+
+      # A fence opened after a blockquote marker. Every payload line carries
+      # the quote prefix at the opener's depth, which is markup rather than
+      # payload; a line with fewer markers leaves that quote and so ends the
+      # fence too, while a deeper marker is payload.
+      def push_quoted_fence(char, width, sublexer)
+        pop!
+        text = @current_stream.string
+        pos = @current_stream.charpos
+        line = text[((text.rindex("\n", pos - 1) || -1) + 1)...pos]
+        depth = line[/\A#{QUOTE_PREFIX}/].to_s.count('>')
+        prefix = %r/(?:[ \t]*>(?=[ \t]|$)){#{depth}}[ \t]?/
+
+        push do
+          rule %r/^(#{prefix})([ \t]*#{char}{#{width},})([ \t]*)$/ do
+            groups Punctuation, Punctuation, Text
+            pop!
+          end
+          rule(%r/^(?!#{prefix})/) { pop! }
+          rule %r/^#{prefix}/, Punctuation
+          if sublexer
+            rule %r/\n/, Text
+            rule(%r/[^\n]+\n?/) { |m| delegate sublexer, m[0] }
+          else
             rule %r/<\d+>/, Name::Constant
             rule %r/[^\n<]+|<|\n/, Str::Backtick
           end
