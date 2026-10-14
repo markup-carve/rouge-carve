@@ -130,11 +130,13 @@ module Rouge
       # Where a bracketed inline body must close, by the block it sits in: a
       # paragraph ends at a blank line or an interrupting block, a list item
       # also at the next marker, and a heading or table row at its line end.
+      # A fence ends either only when it is closed, which is checked in code.
       BODY_ENDS = {
-        para: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|`{3,}|~{3,}))/,
-        item: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]|`{3,}|~{3,}))/,
+        para: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}))/,
+        item: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/,
         line: /\n/
       }.freeze
+      FENCE_NEXT = /\n(?=#{MARGIN}(`{3,}|~{3,}))/.freeze
 
       # The block states that decide which of those ends applies.
       BODY_SCOPE = {
@@ -830,6 +832,15 @@ module Rouge
           state :"#{body}_#{scope}" do
             rule %r/\]/, Punctuation, :pop!
             rule(%r/(?=#{ends.source}|\n?\z)/) { pop! }
+            # The newline is handed back so the block reads the fence line.
+            rule(FENCE_NEXT) do |m|
+              if fence_closed_below?(m[1])
+                m.pos -= 1
+                pop!
+              else
+                token Text
+              end
+            end
             mixin :inlinecontent
             rule PLAIN_NO_BRACKET, tok
             rule %r/[^\]\n]/, tok
@@ -1014,12 +1025,28 @@ module Rouge
         entry = @brackets[scope]
         unless entry && pos < entry[0]
           text = stream.string
-          last = text.index(BODY_ENDS[scope], pos) || text.length
+          last = body_end(text, pos, scope)
           hits = []
           text[pos...last].scan(BRACKET_SCAN) { hits << pos + $~.begin(0) if $~[0] == ']' }
           entry = @brackets[scope] = [last, hits]
         end
         entry[1].bsearch { |at| at >= pos } ? scope : nil
+      end
+
+      # Where a body opened at +pos+ must end: the first block end, or the
+      # first closed fence, after it.
+      def body_end(text, pos, scope)
+        ends = BODY_ENDS[scope]
+        last = text.index(ends, pos) || text.length
+        return last if scope == :line
+
+        at = pos
+        while (fence = text.index(FENCE_NEXT, at)) && fence < last
+          return fence if fence_closed_below?($~[1], fence + 1)
+
+          at = fence + 1
+        end
+        last
       end
 
       BRACKET_SCAN = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]/.freeze
@@ -1071,10 +1098,9 @@ module Rouge
 
       # Whether a fence opened by +run+ on the current line is closed further
       # down. Only a closed fence interrupts a paragraph.
-      def fence_closed_below?(run)
-        stream = @current_stream
-        text = stream.string
-        line_end = text.index("\n", stream.charpos) || text.length
+      def fence_closed_below?(run, line_start = @current_stream.charpos)
+        text = @current_stream.string
+        line_end = text.index("\n", line_start) || text.length
         closer = %r/^[ \t]*#{Regexp.escape(run[0])}{#{run.length},}[ \t]*$/
         closer_below?(closer, run, line_end)
       end

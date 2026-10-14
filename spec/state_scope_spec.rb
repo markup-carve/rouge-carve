@@ -76,6 +76,11 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at(":kbd[x\n> q]\n", 'x')).to eq 'Text'
     end
 
+    it 'ends the search at a closed fence but not at an unclosed one' do
+      expect(kind_at("a ^[x\n~~~\ny]\n", 'y')).to eq 'Generic.Emph'
+      expect(kind_at("a ^[x\n~~~\ny]\n~~~\n", 'x')).to eq 'Text'
+    end
+
     it 'keeps a heading body on its line' do
       source = "# a ^[x\ny]\n"
       expect(kind_at(source, 'x')).to eq 'Generic.Heading'
