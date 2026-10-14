@@ -63,15 +63,16 @@ module Rouge
       # One attribute block, brace to brace. Quoted values may contain a brace
       # and an escaped quote, so the value alternatives come before the
       # bare-character one; a single nested brace pair is allowed for a braced
-      # span written inside.
-      ATTRS = %r/
-        \{(?=[.:}'"]|\#[\w-]+[\s}]|[A-Za-z][\w-]*(?:[=\s}]|$))(?:
+      # span written inside. The tail is the block after its `{`.
+      ATTRS_TAIL = %r/
+        (?=[.:}'"]|\#[\w-]+[\s}]|[A-Za-z][\w-]*(?:[=\s}]|$))(?:
           "(?:[^"\\\n]|\\.)*"
           |'(?:[^'\\\n]|\\.)*'
           |\{[^{}\n]*\}
           |[^{}\n]
         )*\}
       /x.freeze
+      ATTRS = /\{#{ATTRS_TAIL}/.freeze
 
       # The same block as a STANDALONE ATTRIBUTE LINE, which may span lines
       # but not a blank one: a blank line ends the block it would attach to.
@@ -104,6 +105,52 @@ module Rouge
         3.times { pattern = "(?:#{inner}|\\[#{pattern}\\])*" }
         Regexp.new("\\[#{pattern}\\]").freeze
       end
+
+      # An ordered marker: a number, one letter, or a roman numeral. `Body.`
+      # is a word, not a marker.
+      ORDERED = '(?:\\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]'
+
+      # A list marker at the start of a line, as the list rules below read it.
+      LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
+
+      # A table row needs its closing pipe: `| not a table` is a paragraph.
+      ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
+
+      # The block openers that interrupt a paragraph. A list marker and a
+      # caption do not, and a fence does only when it is closed - that one is
+      # checked in code, see the :paraline state.
+      INTERRUPT = %r/
+        \#{1,6}[ \t] | >(?:[ \t]|$) | ::: | ::[ \t] | %%
+        | (?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$
+        | \|=?[<>^v~]*#{ROW_END}
+        | (?:\[\^|\*\[|\[)[^\]\n]+\]:[ ]
+        | #{ATTRS_LINE}[ \t]*$
+      /x.freeze
+
+      # A paragraph that is a lone image or display math: a caption under it
+      # is that block's.
+      IMAGE_LINE = %r/
+        #{MARGIN}(?:!#{LABEL}(?:\([^)\n]*\)|#{LABEL})?|\$\$(`+)[^\n]*?\1)(?:#{ATTRS})?[ \t]*$
+      /x.freeze
+
+      # The braced inline families: delimiter, content token, state.
+      BRACED = {
+        '*' => [Generic::Strong, :forcedstrong], '/' => [Generic::Emph, :forcedemph],
+        '_' => [Generic::Emph, :forcedunderline], '^' => [Generic::Emph, :superscript],
+        ',' => [Generic::Emph, :subscript], '=' => [Generic::Inserted, :bracedmark],
+        '+' => [Generic::Inserted, :insertion], '-' => [Generic::Deleted, :deletion]
+      }.freeze
+
+      # The bare emphasis delimiters: state, content token, and the characters
+      # that may not stand before an opener or after it. A closer needs a
+      # non-space before it and no letter or digit after it.
+      BARE = {
+        '*' => [:strong, Generic::Strong, /[\w*]/, /[\s*]/],
+        '/' => [:emph, Generic::Emph, /[\w\/]/, /[\s\/]/],
+        '_' => [:underline, Generic::Emph, /[\w_\/]/, /[\s_]/],
+        '~' => [:strike, Generic::Deleted, /[\w~]/, /[\s~]/],
+        '=' => [:mark, Generic::Inserted, /[\w=<>!]/, /[\s>=]/]
+      }.freeze
 
       # Characters that can begin an inline construct. A run of anything else is
       # ordinary content and is emitted as ONE token - without this every
@@ -204,14 +251,15 @@ module Rouge
             open_block :linkdest
           end
 
-          # A definition-list term (`::`) and its definition (`:`).
+          # A definition-list term (`::`) and its definition (`:`). A term
+          # may wrap onto lazy lines, and a definition's text is an item's.
           rule %r/#{bol}(#{MARGIN})(::)([ \t]+)/ do
             groups Text, Punctuation, Text
-            open_block :heading
+            open_block :dlterm, :heading
           end
           rule %r/#{bol}(#{MARGIN})(:)(?=[ \t])/ do
             groups Text, Punctuation
-            open_block
+            open_block :listitem, :quoteline
           end
 
           # A blockquote marker must be followed by a space or end the line;
@@ -225,37 +273,39 @@ module Rouge
 
           # Task items before plain bullets, so the state marker is its own
           # token. The state is any single character, not only a space or an
-          # x: `[>]` is deferred and `[-]` is dropped.
-          rule %r/#{bol}(#{MARGIN})((?:[-*+]|\d+[.)]|[A-Za-z]+[.)])(?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])/ do
+          # x: `[>]` is deferred and `[-]` is dropped. A `+` is not a bullet in
+          # Carve; it continues a container.
+          rule %r/#{bol}(#{MARGIN})((?:[-*]|#{ORDERED})(?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])/ do
             groups Text, Punctuation, Text, Name::Constant
-            open_block
+            open_block :listitem, :quoteline
           end
 
           # Bullets. A run of markers on one line opens nested lists at once
           # (`- - A`), and attributes may be glued straight onto the marker.
-          rule %r/#{bol}(#{MARGIN})((?:[-*+][ \t]+)*[-*+](?:#{ATTRS})?)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})((?:[-*][ \t]+)*[-*](?:#{ATTRS})?)(?=[ \t]|$)/ do
             groups Text, Punctuation
-            open_block
+            open_block :listitem, :quoteline
           end
 
           # Ordered markers: numeric, alphabetic, roman, and the bare `.` that
           # continues the enclosing sequence.
-          rule %r/#{bol}(#{MARGIN})((?:\d+|[A-Za-z]+)[.)](?:#{ATTRS})?)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})(#{ORDERED}(?:#{ATTRS})?)(?=[ \t]|$)/ do
             groups Text, Num::Integer
-            open_block
+            open_block :listitem, :quoteline
           end
           rule %r/#{bol}(#{MARGIN})(\.(?:#{ATTRS})?)(?=[ \t]|$)/ do
             groups Text, Num::Integer
-            open_block
+            open_block :listitem, :quoteline
           end
 
           # Tables. The header marker, the alignment run and the separator row
-          # are their own tokens; cell content is lexed inline.
-          rule %r/#{bol}(#{MARGIN})(\|=[<>^v~]*)/ do
+          # are their own tokens; cell content is lexed inline. A row needs its
+          # closing pipe.
+          rule %r/#{bol}(#{MARGIN})(\|=[<>^v~]*)#{ROW_END}/ do
             groups Text, Operator
             open_block :tablerow
           end
-          rule %r/#{bol}(#{MARGIN})(\|)/ do
+          rule %r/#{bol}(#{MARGIN})(\|)#{ROW_END}/ do
             groups Text, Punctuation
             open_block :tablerow
           end
@@ -311,7 +361,54 @@ module Rouge
           groups Text, Name::Attribute
         end
 
+        # Any other line with content starts a paragraph.
+        rule %r/^(?=#{MARGIN}\S)/ do
+          @lone_image = !@current_stream.check(IMAGE_LINE).nil?
+          @indented = @current_stream.check(/[ \t]/) ? true : false
+          push :paragraph
+        end
+
         mixin :inline
+      end
+
+      # A paragraph, and the start of each line after its first: a line that
+      # opens a block interrupting it ends it, anything else continues it, so
+      # a list marker or a caption under prose is prose.
+      state :paragraph do
+        rule(/\n/) { token Text; goto :paraline }
+        mixin :inlinecontent
+        rule PLAIN, Text
+        rule %r/./, Text
+      end
+
+      state :paraline do
+        rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+        rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}))/) { pop! }
+        rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : continue_paragraph(:paragraph) }
+        rule(%r/^(?=#{MARGIN}\^[ \t])/) { @lone_image ? pop! : continue_paragraph(:paragraph) }
+        # An indented paragraph sits in a container, so a list marker below it
+        # opens a sublist or the next item rather than continuing it.
+        rule(%r/^(?=#{MARGIN}#{LIST_MARKER})/) { @indented ? pop! : continue_paragraph(:paragraph) }
+        rule(//) { continue_paragraph(:paragraph) }
+      end
+
+      # The text of a list item, a definition or a definition term. The line
+      # after it may also start the next item or definition.
+      { listitem: Text, dlterm: Generic::Heading }.each do |name, tok|
+        line = :"#{name}line"
+        state name do
+          rule(/\n/) { token Text; goto line }
+          mixin :inlinecontent
+          rule PLAIN, tok
+          rule(/./) { token plain_token }
+        end
+
+        state line do
+          rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+          rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/) { pop! }
+          rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : goto(name) }
+          rule(//) { goto name }
+        end
       end
 
       # Right after a blockquote marker: a block opener, or quoted text.
@@ -446,63 +543,75 @@ module Rouge
         # as a hashtag inside a path. After the verbatim family, so a directive
         # in a code span stays literal; before every other brace rule, none of
         # which can spell `{{`.
-        # THE CLOSER IS IN THE LOOKAHEAD, so an unterminated `{{` never opens
-        # the state at all and stays the ordinary text the processor treats it
-        # as. Without it the opener scoped and only the newline rule below
-        # stopped the damage.
-        rule %r/(\{\{)(?=[ \t]+[^\n]*?[ \t]+\}\})([ \t]+)((?:"(?:\\.|[^"\\])*"|[^#@}\s"][^#@}\s]*))/ do
-          groups Punctuation, Text, Name::Namespace
-          push :includeparts
+        # An unterminated `{{` never opens the state and stays the ordinary
+        # text the processor treats it as.
+        rule %r/(\{\{)([ \t]+)((?:"(?:\\.|[^"\\])*"|[^#@}\s"][^#@}\s]*))/ do |m|
+          if closer_ahead?(:include, /[ \t]\}\}/)
+            groups Punctuation, Text, Name::Namespace
+            push :includeparts
+          else
+            token plain_token, m[0]
+          end
         end
 
-        # CriticMarkup substitution and comment, before the forced family:
-        # `{~old~>new~}` also matches the forced-strike shape.
-        rule %r/(\{~)([^\n]*?)(~>)([^\n]*?)(~\})/ do
-          groups Punctuation, Generic::Deleted, Operator, Generic::Inserted, Punctuation
-        end
-        rule %r/(\{\#)([^\n]*?)(\#\})/ do
-          groups Punctuation, Comment, Punctuation
+        # The braced families. Each opener consumes only its `{` here, so an
+        # unclosed one leaves the character after it to the rules below, and
+        # its closer must be on the line - looked up in a per-line cache, so
+        # a run of unclosed openers stays linear.
+        #
+        # CriticMarkup substitution and forced strike share `{~`; the first of
+        # `~>` and `~}` decides which one it is.
+        rule %r/\{(?=~(?!~\}))/ do
+          next token(plain_token) unless closer_ahead?(:tilde, /~\}/)
+
+          enter_braced(:tildebrace)
         end
 
-        # The braced FORCED emphasis family. Braces make a delimiter apply
-        # where the bare form would not - `my{_path_}name` is underline inside
-        # a word - so the content is emphasis and the braces are its
-        # delimiters, not an attribute block.
-        rule %r/(\{\*)([^\n]+?)(\*\})/ do
-          groups Punctuation, Generic::Strong, Punctuation
-        end
-        rule %r/(\{\/)([^\n]+?)(\/\})/ do
-          groups Punctuation, Generic::Emph, Punctuation
-        end
-        rule %r/(\{_)([^\n]+?)(_\})/ do
-          groups Punctuation, Generic::Emph, Punctuation
-        end
-        rule %r/(\{~)([^\n]+?)(~\})/ do
-          groups Punctuation, Generic::Deleted, Punctuation
+        # A CriticMarkup comment. Without its closer, `{#id}` is an attribute
+        # block.
+        # The scanner's match is read before #check replaces it.
+        rule %r/\{(?=\#)/ do |m|
+          brace = m[0]
+          if closer_ahead?(:criticcomment, /\#\}/, @current_stream.charpos + 1)
+            enter_braced(:criticcomment)
+          elsif (tail = @current_stream.check(ATTRS_TAIL))
+            token Name::Attribute, brace
+            consume_as(Name::Attribute, tail)
+          else
+            token plain_token, brace
+          end
         end
 
-        # Braced inline families. Sup and sub are braced-only in Carve: a bare
-        # `^x^` or `,x,` is literal text.
-        rule %r/(\{\^)([^\n]+?)(\^\})/ do
-          groups Punctuation, Generic::Emph, Punctuation
+        # The FORCED emphasis family and the other braced inlines. Braces make
+        # a delimiter apply where the bare form would not - `my{_path_}name`
+        # is underline inside a word - so the content is emphasis and the
+        # braces are its delimiters, not an attribute block. Sup and sub are
+        # braced-only in Carve: a bare `^x^` or `,x,` is literal text.
+        BRACED.each do |char, (_, name)|
+          delimiter = Regexp.escape(char)
+          rule %r/\{(?=#{delimiter}(?!#{delimiter}\}))/ do
+            if closer_ahead?(name, /#{delimiter}\}/, @current_stream.charpos + 2)
+              enter_braced(name)
+            else
+              token plain_token
+            end
+          end
         end
-        rule %r/(\{,)([^\n]+?)(,\})/ do
-          groups Punctuation, Generic::Emph, Punctuation
+        rule %r/\{(?=>>)/ do
+          if closer_ahead?(:criticnote, /<<\}/, @current_stream.charpos + 3)
+            enter_braced(:criticnote, 2)
+          else
+            token plain_token
+          end
         end
-        rule %r/(\{=)([^\n]+?)(=\})/ do
-          groups Punctuation, Generic::Inserted, Punctuation
-        end
-        rule %r/(\{\+)([^\n]+?)(\+\})/ do
-          groups Punctuation, Generic::Inserted, Punctuation
-        end
-        rule %r/(\{-)([^\n]+?)(-\})/ do
-          groups Punctuation, Generic::Deleted, Punctuation
-        end
-        rule %r/(\{>>)([^\n]+?)(<<\})/ do
-          groups Punctuation, Comment, Punctuation
-        end
-        rule %r/(\{%)(.*?)(%\})/ do
-          groups Comment::Preproc, Comment, Comment::Preproc
+        rule %r/\{(?=%)/ do
+          if closer_ahead?(:bracedcomment, /%\}/, @current_stream.charpos + 1)
+            token Comment::Preproc
+            push :bracedcomment
+            push :preprocchar
+          else
+            token plain_token
+          end
         end
 
         # An inline footnote carries content; a reference carries a label.
@@ -516,13 +625,13 @@ module Rouge
             token plain_token
           end
         end
-        rule %r/(\[\^)([^\]\n]+)(\])/ do
+        rule %r/(\[\^)([^\[\]\n]+)(\])/ do
           groups Punctuation, Name::Label, Punctuation
         end
 
         # A citation before a link: both open with `[`, and `[@key]` or
         # `[+@key]` would otherwise be read as a link label.
-        rule %r/(\[)(\+?@[^\]\n]+)(\])/ do
+        rule %r/(\[)(\+?@[^\[\]\n]+)(\])/ do
           groups Punctuation, Name::Variable, Punctuation
         end
 
@@ -569,28 +678,12 @@ module Rouge
         # An attribute block attached to the construct before it.
         rule ATTRS, Name::Attribute
 
-        # Bare emphasis delimiters. Carve's bare set is / * _ ~ = and each
-        # needs a non-space inner boundary so `a / b` stays literal.
-        rule %r/(\/\*)([^\n]+?)(\*\/)/ do
-          groups Punctuation, Generic::Strong, Punctuation
-        end
-        rule %r/(\*\/)([^\n]+?)(\/\*)/ do
-          groups Punctuation, Generic::Strong, Punctuation
-        end
-        rule %r/(\*)(\S(?:[^\n]*?\S)?)(\*)/ do
-          groups Punctuation, Generic::Strong, Punctuation
-        end
-        rule %r/(\/)(\S(?:[^\n]*?\S)?)(\/)/ do
-          groups Punctuation, Generic::Emph, Punctuation
-        end
-        rule %r/(_)(\S(?:[^\n]*?\S)?)(_)/ do
-          groups Punctuation, Generic::Emph, Punctuation
-        end
-        rule %r/(~)(\S(?:[^\n]*?\S)?)(~)/ do
-          groups Punctuation, Generic::Deleted, Punctuation
-        end
-        rule %r/(=)(\S(?:[^\n]*?\S)?)(=)/ do
-          groups Punctuation, Generic::Inserted, Punctuation
+        # Bare emphasis delimiters, Carve's / * _ ~ = set. Whether one opens is
+        # decided in #open_bare, from the characters on both sides and from
+        # whether a closer follows on the line; what it encloses is lexed as
+        # inline content. `==>` is left whole for the typographic rule.
+        rule %r/[*\/_~]|=(?!=>)/ do |m|
+          open_bare(m[0])
         end
 
         # A mention and a tag, each one token: the sigil is part of the name
@@ -626,6 +719,94 @@ module Rouge
         rule %r/\n/, Text, :pop!
       end
 
+      # The body of a bare emphasis run. A same-kind delimiter that cannot
+      # close is content (`*a *b* c*` closes at `b*`), and the run ends with
+      # its line in case a construct inside took the closer the opener saw.
+      #
+      # NO LOOKBEHIND IN A RULE. Rouge before 5 scans without a fixed anchor,
+      # so a lookbehind cannot see what precedes the scan position; the
+      # character before a closer is read in #close_bare instead.
+      BARE.each do |char, (name, _, _, _)|
+        state name do
+          rule(%r/#{Regexp.escape(char)}(?![\p{L}\p{N}])/) { close_bare(/\s/) }
+          rule(/$/) { pop! }
+          rule(/#{Regexp.escape(char)}/) { token plain_token }
+          mixin :inlinecontent
+          rule(PLAIN) { token plain_token }
+          rule(/./) { token plain_token }
+        end
+      end
+
+      # Bold italic in one delimiter pair, in both nesting orders. Its own
+      # delimiters inside it are content unless they close it.
+      # A comment inside it ends at its closer.
+      {
+        bolditalic: ['\*\/', /\s/, '(?<=\S)\*\/'],
+        italicbold: ['\/\*(?!\w)', /[\s*]/, '(?<![\s*])\/\*(?!\w)']
+      }.each do |name, (closer, refused_before, closer_in_line)|
+        state name do
+          rule(/#{closer}/) { close_bare(refused_before) }
+          rule(/$/) { pop! }
+          rule %r/(%%)((?:(?!#{closer_in_line})[^\n])*)/ do
+            groups Comment::Preproc, Comment
+          end
+          rule(%r/[*\/]/) { token plain_token }
+          mixin :inlinecontent
+          rule(PLAIN) { token plain_token }
+          rule(/./) { token plain_token }
+        end
+      end
+
+      # The rest of an opener whose `{` was already emitted.
+      state :punctchar do
+        rule(/[^\n]/) { token Punctuation; pop! }
+      end
+      state :preprocchar do
+        rule(/[^\n]/) { token Comment::Preproc; pop! }
+      end
+
+      # Braced bodies, flat up to their closer.
+      BRACED.each do |char, (tok, name)|
+        closer = /#{Regexp.escape(char)}\}/
+        state name do
+          rule closer, Punctuation, :pop!
+          rule(/$/) { pop! }
+          rule %r/(?:(?!#{closer})[^\n])+/, tok
+        end
+      end
+
+      state :tildebrace do
+        rule %r/~>/, Operator, :tildenew
+        rule %r/~\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!~[>}])[^\n])+/, Generic::Deleted
+      end
+
+      # The new side of a substitution. Its closer ends the whole construct.
+      state :tildenew do
+        rule(/~\}/) { token Punctuation; pop!(2) }
+        rule(/$/) { pop!(2) }
+        rule %r/(?:(?!~\})[^\n])+/, Generic::Inserted
+      end
+
+      state :criticcomment do
+        rule %r/\#\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!\#\})[^\n])+/, Comment
+      end
+
+      state :criticnote do
+        rule %r/<<\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!<<\})[^\n])+/, Comment
+      end
+
+      state :bracedcomment do
+        rule %r/%\}/, Comment::Preproc, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!%\})[^\n])+/, Comment
+      end
+
       # Both bodies end at their bracket, or at the end of the paragraph when
       # a construct inside consumed the bracket the opener saw.
       state :inlinefootnote do
@@ -652,11 +833,132 @@ module Rouge
       PLAIN_TOKENS = {
         heading: Generic::Heading, quoteline: Generic::Emph,
         caption: Generic::Subheading, inlinefootnote: Generic::Emph,
-        rolebody: Name::Function
-      }.freeze
+        rolebody: Name::Function, dlterm: Generic::Heading, bolditalic: Generic::Strong,
+        italicbold: Generic::Strong
+      }.merge(BARE.values.to_h { |name, tok, _, _| [name, tok] }).freeze
 
+      # Italic or underline inside strong, or the reverse, reads as strong,
+      # the token the combined delimiters have always had.
       def plain_token
-        PLAIN_TOKENS.fetch(state.name, Text)
+        name = state.name
+        if %i[emph underline].include?(name) && in_state?(:strong)
+          Generic::Strong
+        else
+          PLAIN_TOKENS.fetch(name, Text)
+        end
+      end
+
+      # Decide whether the bare delimiter +char+, just consumed, opens a run.
+      # It opens when the characters around it allow it and a closer follows
+      # on its line; otherwise it is plain text. `/*` and `*/` open bold
+      # italic first, with the engine's guards for each order.
+      def open_bare(char)
+        text = @current_stream.string
+        pos = @current_stream.charpos
+        before = pos > 1 ? text[pos - 2] : nil
+        before = nil if before == "\n"
+        after = text[pos]
+        name, _, refused_before, refused_after = BARE[char]
+
+        if char == '/' && after == '*' && text[pos + 1].to_s.match?(/\S/) &&
+           closer_ahead?(:bolditalic, %r/(?<=\S)\*\//, pos + 2, masked: :combined)
+          token Punctuation
+          push :bolditalic
+          return push(:punctchar)
+        end
+
+        if char == '*' && after == '/' && !before.to_s.match?(/[\w*\/]/) &&
+           text[pos + 1].to_s.match?(/\S/) && !(text[pos + 1] == '*' && text[pos + 2].to_s.match?(/[\s*]/)) &&
+           closer_ahead?(:italicbold, %r/(?<![\s*])\/\*(?!\w)/, pos + 2, masked: :combined)
+          token Punctuation
+          push :italicbold
+          return push(:punctchar)
+        end
+
+        if after && !after.match?(refused_after) && !(before && before.match?(refused_before)) &&
+           closer_ahead?(name, %r/(?<=\S)#{Regexp.escape(char)}(?![\p{L}\p{N}])/, pos, masked: :bare)
+          token Punctuation
+          return push(name)
+        end
+
+        token plain_token
+      end
+
+      # A closer candidate inside a bare run, just consumed: it closes unless
+      # the character before it is one +refused_before+ matches.
+      def close_bare(refused_before)
+        text = @current_stream.string
+        at = @current_stream.charpos - @current_stream[0].length
+        if at.positive? && !text[at - 1].match?(refused_before)
+          token Punctuation
+          pop!
+        else
+          token plain_token
+        end
+      end
+
+      # Emit the `{` of a braced opener and enter +name+, whose remaining
+      # opener characters come next.
+      def enter_braced(name, rest = 1)
+        token Punctuation
+        push name
+        rest.times { push :punctchar }
+      end
+
+      # Emit the next +text+ of the input as one +tok+ token.
+      def consume_as(tok, text)
+        literal = Regexp.new(Regexp.escape(text))
+        push do
+          rule(literal) { token tok; pop! }
+        end
+      end
+
+      # Whether +pattern+ matches on the current line at or after +from+.
+      # The matches of one line are found once per pattern and reused, which
+      # keeps a line full of unclosed openers linear instead of quadratic.
+      # A masked line hides what a bare closer cannot reach into: escapes,
+      # code spans, braced inlines, link destinations and autolinks. A bare
+      # run's line also ends at a trailing comment, which takes its closer.
+      def closer_ahead?(key, pattern, from = @current_stream.charpos, masked: nil)
+        stream = @current_stream
+        unless @closers_for.equal?(stream)
+          @closers_for = stream
+          @closers = {}
+        end
+        pos = stream.charpos
+        entry = @closers[key]
+        unless entry && pos >= entry[0] && pos <= entry[1]
+          text = stream.string
+          first = pos.zero? ? 0 : (text.rindex("\n", pos - 1) || -1) + 1
+          last = text.index("\n", pos) || text.length
+          line = text[first...last]
+          line = mask_opaque(line) if masked
+          line = line[0...line.index('%%')] if masked == :bare && line.include?('%%')
+          hits = []
+          line.scan(pattern) { hits << first + Regexp.last_match.begin(0) }
+          entry = @closers[key] = [first, last, hits]
+        end
+        !entry[2].bsearch { |at| at >= from }.nil?
+      end
+
+      OPAQUE = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]\([^)\n]*\)|<[^<>\s]+>/.freeze
+
+      def mask_opaque(line)
+        line = line.gsub(OPAQUE) { |span| "\u0001" * span.length }
+        # Braced inlines pair up in code: a regex scanning from every unclosed
+        # `{*` to the end of the line is quadratic. Once a kind has no closer
+        # left, no later opener of that kind can have one either.
+        '*/_^,=+~#%-'.each_char do |kind|
+          at = 0
+          while (open = line.index("{#{kind}", at))
+            close = line.index("#{kind}}", open + 3)
+            break unless close
+
+            line[open...close + 2] = "\u0001" * (close + 2 - open)
+            at = close + 2
+          end
+        end
+        line
       end
 
       # Whether an unescaped `]` follows before the paragraph ends. The
@@ -681,13 +983,13 @@ module Rouge
       # is remembered per +key+, because every later opener of the same kind
       # would miss too - without that, a run of unclosed openers rescans the
       # rest of the document once each.
-      def closer_below?(closer, key)
+      def closer_below?(closer, key, from = @current_stream.charpos)
         stream = @current_stream
         @closer_misses = {} unless @closer_misses_for.equal?(stream)
         @closer_misses_for = stream
         return false if @closer_misses[key]
 
-        found = stream.string.index(closer, stream.charpos)
+        found = stream.string.index(closer, from)
         @closer_misses[key] = true unless found
         !found.nil?
       end
@@ -696,12 +998,27 @@ module Rouge
       # opener that is a single token. After a blockquote marker the opener
       # replaces the quote's start state, and a single-token opener hands the
       # rest of the line to quoted text.
-      def open_block(name = nil)
+      def open_block(name = nil, quoted = name || :quoteline)
         if state?(:quotestart)
-          goto(name || :quoteline)
+          goto quoted
         elsif name
           push name
         end
+      end
+
+      def continue_paragraph(name)
+        @lone_image = false
+        goto name
+      end
+
+      # Whether a fence opened by +run+ on the current line is closed further
+      # down. Only a closed fence interrupts a paragraph.
+      def fence_closed_below?(run)
+        stream = @current_stream
+        text = stream.string
+        line_end = text.index("\n", stream.charpos) || text.length
+        closer = %r/^[ \t]*#{Regexp.escape(run[0])}{#{run.length},}[ \t]*$/
+        closer_below?(closer, run, line_end)
       end
 
       # Lex the tail of a fence or container opener line without leaving the
