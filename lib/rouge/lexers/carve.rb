@@ -127,6 +127,23 @@ module Rouge
         | #{ATTRS_LINE}[ \t]*$
       /x.freeze
 
+      # Where a bracketed inline body must close, by the block it sits in: a
+      # paragraph ends at a blank line or an interrupting block, a list item
+      # also at the next marker, and a heading or table row at its line end.
+      # A fence ends either only when it is closed, which is checked in code.
+      BODY_ENDS = {
+        para: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}))/,
+        item: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/,
+        line: /\n/
+      }.freeze
+      FENCE_NEXT = /\n(?=#{MARGIN}(`{3,}|~{3,}))/.freeze
+
+      # The block states that decide which of those ends applies.
+      BODY_SCOPE = {
+        paragraph: :para, listitem: :item, dlterm: :item, heading: :line,
+        caption: :line, quoteline: :line, tablerow: :line, defline: :line
+      }.freeze
+
       # A paragraph that is a lone image or display math: a caption under it
       # is that block's.
       IMAGE_LINE = %r/
@@ -618,9 +635,9 @@ module Rouge
         # Both bracketed bodies need a closing `]` before the paragraph ends;
         # an opener without one is text, as it is in the engine.
         rule %r/\^\[/ do
-          if bracket_ahead?
+          if (scope = bracket_ahead?)
             token Punctuation
-            push :inlinefootnote
+            push :"inlinefootnote_#{scope}"
           else
             token plain_token
           end
@@ -662,9 +679,9 @@ module Rouge
 
         # The `:name[...]` extension form.
         rule %r/(:)([a-zA-Z][\w-]*)(\[)/ do
-          if bracket_ahead?
+          if (scope = bracket_ahead?)
             groups Punctuation, Name::Function, Punctuation
-            push :rolebody
+            push :"rolebody_#{scope}"
           else
             token plain_token
           end
@@ -807,24 +824,29 @@ module Rouge
         rule %r/(?:(?!%\})[^\n])+/, Comment
       end
 
-      # Both bodies end at their bracket, or at the end of the paragraph when
-      # a construct inside consumed the bracket the opener saw.
-      state :inlinefootnote do
-        rule %r/\]/, Punctuation, :pop!
-        rule %r/\n(?=[ \t]*(?:\n|\z))/, Text, :pop!
-        mixin :inlinecontent
-        rule PLAIN_NO_BRACKET, Generic::Emph
-        rule %r/[^\]\n]/, Generic::Emph
-        rule %r/\n/, Text
-      end
-
-      state :rolebody do
-        rule %r/\]/, Punctuation, :pop!
-        rule %r/\n(?=[ \t]*(?:\n|\z))/, Text, :pop!
-        mixin :inlinecontent
-        rule PLAIN_NO_BRACKET, Name::Function
-        rule %r/[^\]\n]/, Name::Function
-        rule %r/\n/, Text
+      # Both bodies end at their bracket, or where their block ends when a
+      # construct inside consumed the bracket the opener saw. The newline is
+      # left to the block, which decides what the next line opens.
+      { inlinefootnote: Generic::Emph, rolebody: Name::Function }.each do |body, tok|
+        BODY_ENDS.each do |scope, ends|
+          state :"#{body}_#{scope}" do
+            rule %r/\]/, Punctuation, :pop!
+            rule(%r/(?=#{ends.source}|\n?\z)/) { pop! }
+            # The newline is handed back so the block reads the fence line.
+            rule(FENCE_NEXT) do |m|
+              if fence_closed_below?(m[1])
+                m.pos -= 1
+                pop!
+              else
+                token Text
+              end
+            end
+            mixin :inlinecontent
+            rule PLAIN_NO_BRACKET, tok
+            rule %r/[^\]\n]/, tok
+            rule %r/\n/, Text
+          end
+        end
       end
 
       private
@@ -832,10 +854,12 @@ module Rouge
       # The token a state gives a character that opens nothing.
       PLAIN_TOKENS = {
         heading: Generic::Heading, quoteline: Generic::Emph,
-        caption: Generic::Subheading, inlinefootnote: Generic::Emph,
-        rolebody: Name::Function, dlterm: Generic::Heading, bolditalic: Generic::Strong,
+        caption: Generic::Subheading, dlterm: Generic::Heading, bolditalic: Generic::Strong,
         italicbold: Generic::Strong
-      }.merge(BARE.values.to_h { |name, tok, _, _| [name, tok] }).freeze
+      }.merge(BARE.values.to_h { |name, tok, _, _| [name, tok] })
+        .merge(BODY_ENDS.keys.flat_map do |scope|
+          [[:"inlinefootnote_#{scope}", Generic::Emph], [:"rolebody_#{scope}", Name::Function]]
+        end.to_h).freeze
 
       # Italic or underline inside strong, or the reverse, reads as strong,
       # the token the combined delimiters have always had.
@@ -860,8 +884,10 @@ module Rouge
         after = text[pos]
         name, _, refused_before, refused_after = BARE[char]
 
+        limit = enclosing_closer(pos)
+
         if char == '/' && after == '*' && text[pos + 1].to_s.match?(/\S/) &&
-           closer_ahead?(:bolditalic, %r/(?<=\S)\*\//, pos + 2, masked: :combined)
+           closer_ahead?(:bolditalic, COMBINED_CLOSERS[:bolditalic], pos + 2, masked: :combined, before: limit)
           token Punctuation
           push :bolditalic
           return push(:punctchar)
@@ -869,19 +895,37 @@ module Rouge
 
         if char == '*' && after == '/' && !before.to_s.match?(/[\w*\/]/) &&
            text[pos + 1].to_s.match?(/\S/) && !(text[pos + 1] == '*' && text[pos + 2].to_s.match?(/[\s*]/)) &&
-           closer_ahead?(:italicbold, %r/(?<![\s*])\/\*(?!\w)/, pos + 2, masked: :combined)
+           closer_ahead?(:italicbold, COMBINED_CLOSERS[:italicbold], pos + 2, masked: :combined, before: limit)
           token Punctuation
           push :italicbold
           return push(:punctchar)
         end
 
         if after && !after.match?(refused_after) && !(before && before.match?(refused_before)) &&
-           closer_ahead?(name, %r/(?<=\S)#{Regexp.escape(char)}(?![\p{L}\p{N}])/, pos, masked: :bare)
+           closer_ahead?(name, BARE_CLOSERS[name], pos, masked: :bare, before: limit)
           token Punctuation
           return push(name)
         end
 
         token plain_token
+      end
+
+      BARE_CLOSERS = BARE.to_h do |char, (name, _, _, _)|
+        [name, %r/(?<=\S)#{Regexp.escape(char)}(?![\p{L}\p{N}])/]
+      end.freeze
+      COMBINED_CLOSERS = {
+        bolditalic: %r/(?<=\S)\*\//, italicbold: %r/(?<![\s*])\/\*(?!\w)/
+      }.freeze
+
+      # Where the run the scanner is in closes, if it is in one: a run opened
+      # inside it must close first, so `*a /b* c/` is strong `a /b`.
+      def enclosing_closer(pos)
+        name = state.name
+        if BARE_CLOSERS.key?(name)
+          closer_at(name, BARE_CLOSERS[name], pos, masked: :bare)
+        elsif COMBINED_CLOSERS.key?(name)
+          closer_at(name, COMBINED_CLOSERS[name], pos, masked: :combined)
+        end
       end
 
       # A closer candidate inside a bare run, just consumed: it closes unless
@@ -919,7 +963,14 @@ module Rouge
       # A masked line hides what a bare closer cannot reach into: escapes,
       # code spans, braced inlines, link destinations and autolinks. A bare
       # run's line also ends at a trailing comment, which takes its closer.
-      def closer_ahead?(key, pattern, from = @current_stream.charpos, masked: nil)
+      def closer_ahead?(key, pattern, from = @current_stream.charpos, masked: nil, before: nil)
+        at = closer_at(key, pattern, from, masked: masked)
+        !at.nil? && (before.nil? || at < before)
+      end
+
+      # The position of the first match of +pattern+ on the current line at or
+      # after +from+, or nil.
+      def closer_at(key, pattern, from = @current_stream.charpos, masked: nil)
         stream = @current_stream
         unless @closers_for.equal?(stream)
           @closers_for = stream
@@ -938,7 +989,7 @@ module Rouge
           line.scan(pattern) { hits << first + Regexp.last_match.begin(0) }
           entry = @closers[key] = [first, last, hits]
         end
-        !entry[2].bsearch { |at| at >= from }.nil?
+        entry[2].bsearch { |at| at >= from }
       end
 
       OPAQUE = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]\([^)\n]*\)|<[^<>\s]+>/.freeze
@@ -961,22 +1012,56 @@ module Rouge
         line
       end
 
-      # Whether an unescaped `]` follows before the paragraph ends. The
-      # brackets of one paragraph are found in one pass and reused, so a run
-      # of unclosed openers does not rescan the paragraph once each.
+      # The scope of the block a bracketed body opens in, when a `]` outside
+      # escapes and code spans follows before that block ends; nil otherwise.
+      # The brackets of one block are found in one pass and reused, so a run
+      # of unclosed openers does not rescan it once each.
       def bracket_ahead?
         stream = @current_stream
         pos = stream.charpos
-        unless @brackets_for.equal?(stream) && pos < @brackets_end
+        scope = body_scope
+        @brackets = {} unless @brackets_for.equal?(stream)
+        @brackets_for = stream
+        entry = @brackets[scope]
+        unless entry && pos < entry[0]
           text = stream.string
-          @brackets_for = stream
-          @brackets_end = text.index(/\n[ \t]*(?:\n|\z)/, pos) || text.length
-          @brackets = []
-          text[pos...@brackets_end].scan(/\\.|\]/m) do |hit|
-            @brackets << pos + Regexp.last_match.begin(0) if hit == ']'
-          end
+          last = body_end(text, pos, scope)
+          hits = []
+          text[pos...last].scan(BRACKET_SCAN) { hits << pos + $~.begin(0) if $~[0] == ']' }
+          entry = @brackets[scope] = [last, hits]
         end
-        !@brackets.bsearch { |at| at >= pos }.nil?
+        entry[1].bsearch { |at| at >= pos } ? scope : nil
+      end
+
+      # Where a body opened at +pos+ must end: the first block end, or the
+      # first closed fence, after it.
+      def body_end(text, pos, scope)
+        ends = BODY_ENDS[scope]
+        last = text.index(ends, pos) || text.length
+        return last if scope == :line
+
+        at = pos
+        while (fence = text.index(FENCE_NEXT, at)) && fence < last
+          return fence if fence_closed_below?($~[1], fence + 1)
+
+          at = fence + 1
+        end
+        last
+      end
+
+      BRACKET_SCAN = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]/.freeze
+
+      # The scope of the nearest enclosing block state. An indented paragraph
+      # sits in a container, so the next list marker ends it as it ends an item.
+      def body_scope
+        stack.reverse_each do |s|
+          scope = BODY_SCOPE[s.name]
+          next unless scope
+          return :item if scope == :para && @indented
+
+          return scope
+        end
+        :para
       end
 
       # Whether +closer+ matches a line below the current position. A miss
@@ -1013,10 +1098,9 @@ module Rouge
 
       # Whether a fence opened by +run+ on the current line is closed further
       # down. Only a closed fence interrupts a paragraph.
-      def fence_closed_below?(run)
-        stream = @current_stream
-        text = stream.string
-        line_end = text.index("\n", stream.charpos) || text.length
+      def fence_closed_below?(run, line_start = @current_stream.charpos)
+        text = @current_stream.string
+        line_end = text.index("\n", line_start) || text.length
         closer = %r/^[ \t]*#{Regexp.escape(run[0])}{#{run.length},}[ \t]*$/
         closer_below?(closer, run, line_end)
       end
