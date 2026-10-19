@@ -49,6 +49,15 @@ module Rouge
     # Spec: https://markup-carve.github.io/carve/
     class Carve < RegexLexer
       class DelimitedTable < RegexLexer
+        # Unquoted fields are Name::Variable (colored in the default Rouge
+        # styles, unlike a bare Name); the header record's unquoted fields are
+        # Name::Attribute.
+        start { @header = true }
+
+        def field_token
+          @header ? Name::Attribute : Name::Variable
+        end
+
         state :root do
           rule /"/ do
             token Str
@@ -59,12 +68,18 @@ module Rouge
             if m[0] == self.class::SEPARATOR
               token Punctuation
             else
-              token Text
+              token field_token
               push :unquoted
             end
           end
-          rule /[^,\t\n]+/, Text, :unquoted
-          rule /\n/, Text
+          rule /[^,\t\n]+/ do
+            token field_token
+            push :unquoted
+          end
+          rule /\n/ do
+            token Text
+            @header = false
+          end
         end
 
         state :unquoted do
@@ -73,11 +88,17 @@ module Rouge
               token Punctuation
               pop!
             else
-              token Text
+              token field_token
             end
           end
-          rule /[^,\t\n]+/, Text
-          rule /\n/, Text, :pop!
+          rule /[^,\t\n]+/ do
+            token field_token
+          end
+          rule /\n/ do
+            token Text
+            @header = false
+            pop!
+          end
         end
 
         state :quoted do
