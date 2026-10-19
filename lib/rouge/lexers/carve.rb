@@ -66,7 +66,7 @@ module Rouge
           end
           rule /[,\t]/ do |m|
             if m[0] == self.class::SEPARATOR
-              token Operator
+              token Keyword
             else
               token field_token
               push :unquoted
@@ -85,7 +85,7 @@ module Rouge
         state :unquoted do
           rule /[,\t]/ do |m|
             if m[0] == self.class::SEPARATOR
-              token Operator
+              token Keyword
               pop!
             else
               token field_token
