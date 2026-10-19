@@ -234,6 +234,46 @@ RSpec.describe Rouge::Lexers::Carve do
   end
 
   describe 'fenced blocks' do
+    it 'highlights CSV separators and quoted fields' do
+      source = "```csv\nPlan,Seats,Price per month\nStarter,1,\"$0\"\nTeam,10,\"$49, billed yearly\"\n```\n"
+      tokens = lex(source)
+      expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Literal.String', '"$0"']
+      expect(tokens).to include ['Literal.String', '"$49, billed yearly"']
+      expect(tokens).to include ['Text', "\nPlan"]
+      expect(names(source)).not_to include 'Error'
+    end
+
+    it 'keeps a quoted newline and escaped quote inside a CSV field' do
+      tokens = lex("```csv\n\"first\nsecond \"\"quote\"\"\",end\n```\n")
+      expect(tokens).to include ['Literal.String.Escape', '""']
+      expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Text', "end\n"]
+      expect(tokens.select { |name, _| name == 'Literal.String' }.map(&:last).join).to eq "\"first\nsecond quote\""
+    end
+
+    it 'uses tabs but not commas as TSV separators' do
+      tokens = lex("```tsv\na,b\t\"c\td\"\te\n```\n")
+      expect(tokens).to include ['Text', "\na,b"]
+      expect(tokens).to include ['Punctuation', "\t"]
+      expect(tokens).to include ['Literal.String', "\"c\td\""]
+      expect(tokens).not_to include ['Punctuation', ',']
+    end
+
+    it 'keeps a quote in an unquoted field plain and handles an unclosed quote' do
+      tokens = lex("```csv\na\"b,\"open\nmore\n```")
+      expect(tokens).to include ['Text', "\na\"b"]
+      expect(tokens).to include ['Literal.String', "\"open\nmore\n"]
+      expect(tokens).not_to include ['Error', anything]
+    end
+
+    it 'leaves text after a closing quote plain' do
+      tokens = lex("```csv\n\"a\"tail,next\n```\n")
+      expect(tokens).to include ['Literal.String', '"a"']
+      expect(tokens).to include ['Text', 'tail']
+      expect(tokens).to include ['Punctuation', ',']
+    end
+
     it 'highlights the payload with a lexer for the declared language' do
       names = names("```ruby\nx = 1\n```\n")
       expect(names).to include 'Literal.Number.Integer'
