@@ -237,7 +237,7 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'highlights CSV separators and quoted fields' do
       source = "```csv\nPlan,Seats,Price per month\nStarter,1,\"$0\"\nTeam,10,\"$49, billed yearly\"\n```\n"
       tokens = lex(source)
-      expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Operator', ',']
       expect(tokens).to include ['Name.Attribute', 'Plan']
       expect(tokens).to include ['Name.Variable', 'Starter']
       expect(tokens).to include ['Name.Variable', '1']
@@ -261,7 +261,7 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'keeps a quoted newline and escaped quote inside a CSV field' do
       tokens = lex("```csv\n\"first\nsecond \"\"quote\"\"\",end\n```\n")
       expect(tokens).to include ['Literal.String.Escape', '""']
-      expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Operator', ',']
       expect(tokens).to include ['Name.Attribute', 'end']
       expect(tokens.select { |name, _| name == 'Literal.String' }.map(&:last).join).to eq "\"first\nsecond quote\""
     end
@@ -269,9 +269,9 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'uses tabs but not commas as TSV separators' do
       tokens = lex("```tsv\na,b\t\"c\td\"\te\n```\n")
       expect(tokens).to include ['Name.Attribute', 'a,b']
-      expect(tokens).to include ['Punctuation', "\t"]
+      expect(tokens).to include ['Operator', "\t"]
       expect(tokens).to include ['Literal.String', "\"c\td\""]
-      expect(tokens).not_to include ['Punctuation', ',']
+      expect(tokens).not_to include ['Operator', ',']
     end
 
     it 'types a quote in an unquoted field and handles an unclosed quote' do
@@ -285,7 +285,7 @@ RSpec.describe Rouge::Lexers::Carve do
       tokens = lex("```csv\n\"a\"tail,next\n```\n")
       expect(tokens).to include ['Literal.String', '"a"']
       expect(tokens).to include ['Name.Attribute', 'tail']
-      expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Operator', ',']
     end
 
     it 'highlights the payload with a lexer for the declared language' do
