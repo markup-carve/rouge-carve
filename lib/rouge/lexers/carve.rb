@@ -48,6 +48,53 @@ module Rouge
     #
     # Spec: https://markup-carve.github.io/carve/
     class Carve < RegexLexer
+      class DelimitedTable < RegexLexer
+        state :root do
+          rule /"/ do
+            token Str
+            push :unquoted
+            push :quoted
+          end
+          rule /[,\t]/ do |m|
+            if m[0] == self.class::SEPARATOR
+              token Punctuation
+            else
+              token Text
+              push :unquoted
+            end
+          end
+          rule /[^,\t\n]+/, Text, :unquoted
+          rule /\n/, Text
+        end
+
+        state :unquoted do
+          rule /[,\t]/ do |m|
+            if m[0] == self.class::SEPARATOR
+              token Punctuation
+              pop!
+            else
+              token Text
+            end
+          end
+          rule /[^,\t\n]+/, Text
+          rule /\n/, Text, :pop!
+        end
+
+        state :quoted do
+          rule /""/, Str::Escape
+          rule /"/, Str, :pop!
+          rule /[^"]+/, Str
+        end
+      end
+
+      class CsvTable < DelimitedTable
+        SEPARATOR = ','.freeze
+      end
+
+      class TsvTable < DelimitedTable
+        SEPARATOR = "\t".freeze
+      end
+
       title 'Carve'
       desc 'Carve, a lightweight markup language for documents and the web'
 
@@ -1198,6 +1245,9 @@ module Rouge
       # language, which reads worse than leaving it plain.
       def fence_lexer(language)
         return nil if language.nil? || language.empty?
+
+        return CsvTable.new if language == 'csv'
+        return TsvTable.new if language == 'tsv'
 
         Lexer.find_fancy(language)
       rescue StandardError
