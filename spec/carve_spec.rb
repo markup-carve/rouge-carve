@@ -238,39 +238,53 @@ RSpec.describe Rouge::Lexers::Carve do
       source = "```csv\nPlan,Seats,Price per month\nStarter,1,\"$0\"\nTeam,10,\"$49, billed yearly\"\n```\n"
       tokens = lex(source)
       expect(tokens).to include ['Punctuation', ',']
+      expect(tokens).to include ['Name.Attribute', 'Plan']
+      expect(tokens).to include ['Name.Variable', 'Starter']
+      expect(tokens).to include ['Name.Variable', '1']
       expect(tokens).to include ['Literal.String', '"$0"']
       expect(tokens).to include ['Literal.String', '"$49, billed yearly"']
-      expect(tokens).to include ['Text', "\nPlan"]
       expect(names(source)).not_to include 'Error'
+    end
+
+    it 'types every field of a CSV or TSV body, leaving no plain text' do
+      { 'csv' => ',', 'tsv' => "\t" }.each do |lang, sep|
+        rows = ["Plan#{sep}Seats", "Starter#{sep}\"a\"\"b\"", "x\"y#{sep}\"z\"tail"]
+        tokens = lex("```#{lang}\n#{rows.join("\n")}\n```\n")
+        body = tokens.drop_while { |_, v| v != "\n" }.drop(1).take_while { |_, v| v != '```' }
+        body.reject { |_, v| v == "\n" }.each do |name, value|
+          expect(name).not_to eq('Text'), "#{lang}: #{value.inspect} left plain"
+        end
+        expect(body.map(&:last).join).to eq "#{rows.join("\n")}\n"
+      end
     end
 
     it 'keeps a quoted newline and escaped quote inside a CSV field' do
       tokens = lex("```csv\n\"first\nsecond \"\"quote\"\"\",end\n```\n")
       expect(tokens).to include ['Literal.String.Escape', '""']
       expect(tokens).to include ['Punctuation', ',']
-      expect(tokens).to include ['Text', "end\n"]
+      expect(tokens).to include ['Name.Attribute', 'end']
       expect(tokens.select { |name, _| name == 'Literal.String' }.map(&:last).join).to eq "\"first\nsecond quote\""
     end
 
     it 'uses tabs but not commas as TSV separators' do
       tokens = lex("```tsv\na,b\t\"c\td\"\te\n```\n")
-      expect(tokens).to include ['Text', "\na,b"]
+      expect(tokens).to include ['Name.Attribute', 'a,b']
       expect(tokens).to include ['Punctuation', "\t"]
       expect(tokens).to include ['Literal.String', "\"c\td\""]
       expect(tokens).not_to include ['Punctuation', ',']
     end
 
-    it 'keeps a quote in an unquoted field plain and handles an unclosed quote' do
+    it 'types a quote in an unquoted field and handles an unclosed quote' do
       tokens = lex("```csv\na\"b,\"open\nmore\n```")
-      expect(tokens).to include ['Text', "\na\"b"]
+      expect(tokens).to include ['Name.Attribute', 'a"b']
       expect(tokens).to include ['Literal.String', "\"open\nmore\n"]
       expect(tokens).not_to include ['Error', anything]
     end
 
-    it 'leaves text after a closing quote plain' do
+    it 'types text after a closing quote as a field' do
       tokens = lex("```csv\n\"a\"tail,next\n```\n")
       expect(tokens).to include ['Literal.String', '"a"']
-      expect(tokens).to include ['Text', 'tail']
+      expect(tokens).to include ['Name.Attribute', 'tail']
       expect(tokens).to include ['Punctuation', ',']
     end
 

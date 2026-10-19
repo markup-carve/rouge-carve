@@ -49,7 +49,7 @@ markup, symbol shortcodes, mentions, tags and the typographic runs.
 as Ruby, because that is what a reader expects. A ` ```=html ` raw block is not:
 its info string names an output format, not a language, so the payload stays
 opaque.
-CSV and TSV fences highlight separators, quoted fields, and escaped quotes.
+CSV and TSV fences highlight separators, quoted fields, escaped quotes, and unquoted fields (the header record apart from the data rows).
 
 **Fence widths are respected.** A three-backtick line inside a four-backtick
 fence is content, not a closer. The width is closed over per block rather than
