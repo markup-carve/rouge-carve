@@ -215,6 +215,23 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(token_for("- [x] done\n", '[x]')).to eq 'Name.Constant'
     end
 
+    it 'distinguishes a task continuation from its list marker' do
+      tokens = lex("- [ ] +\n```sh\nnpm test\n```\n")
+      expect(tokens).to include ['Punctuation', '-'], ['Name.Constant', '[ ]'], ['Operator', '+']
+    end
+
+    it 'distinguishes a first-block continuation from bullet and ordered markers' do
+      {'-' => 'Punctuation', '*' => 'Punctuation', '1.' => 'Literal.Number.Integer', '.' => 'Literal.Number.Integer'}.each do |marker, kind|
+        tokens = lex("#{marker} +\n```sh\nnpm test\n```\n")
+        expect(tokens).to include [kind, marker], ['Operator', '+']
+      end
+    end
+
+    it 'colors a standalone continuation inside a list' do
+      expect(token_for("- item\n+\n> note\n", '+')).to eq 'Operator'
+      expect(token_for("+ x\n", "+ x\n")).to eq 'Text'
+    end
+
     it 'reads a header cell marker as one construct including its pipe' do
       expect(token_for("|= A |= B |\n", '|=')).to eq 'Operator'
     end

@@ -356,6 +356,21 @@ module Rouge
             state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
           end
 
+          # A task can attach its first block on the marker line.
+          rule %r/#{bol}(#{MARGIN})([-*](?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])([ \t]+)(\+)([ \t]*)$/ do
+            groups Text, Punctuation, Text, Name::Constant, Text, Operator, Text
+            open_block :listitem, :quoteline
+          end
+
+          rule %r/#{bol}(#{MARGIN})((?:[-*][ \t]+)*[-*](?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+            groups Text, Punctuation, Text, Operator, Text
+            open_block :listitem, :quoteline
+          end
+          rule %r/#{bol}(#{MARGIN})((?:#{ORDERED}|\.)(?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+            groups Text, Num::Integer, Text, Operator, Text
+            open_block :listitem, :quoteline
+          end
+
           # Task items before plain bullets, so the state marker is its own
           # token. The state is any single character, not only a space or an
           # x: `[>]` is deferred and `[-]` is dropped. A `+` is not a bullet in
@@ -490,6 +505,12 @@ module Rouge
 
         state line do
           rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+          if name == :listitem
+            rule %r/^(\+)([ \t]*)$/ do
+              groups Operator, Text
+              goto name
+            end
+          end
           rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/) { pop! }
           rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : goto(name) }
           rule(//) { goto name }
