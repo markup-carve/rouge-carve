@@ -301,14 +301,14 @@ module Rouge
           end
 
           # A caption line attaches to the block above or below it.
-          rule %r/#{bol}(#{MARGIN})(\^)([ \t]+)/ do
+          rule %r/#{bol}(#{MARGIN})(\^)( +)(?=[ \t]*[^ \t\n])/ do
             groups Text, Punctuation, Text
             open_block :caption
           end
 
           # Headings. Carve has no setext form, so a `#` run is the only
           # spelling and a trailing `{...}` is NOT an attribute block here.
-          rule %r/#{bol}(#{MARGIN})(\#{1,6})([ \t]+)/ do
+          rule %r/#{bol}(#{MARGIN})(\#{1,6})( +)(?=[ \t]*[^ \t\n])/ do
             groups Text, Punctuation, Text
             open_block :heading
           end
@@ -338,11 +338,11 @@ module Rouge
 
           # A definition-list term (`::`) and its definition (`:`). A term
           # may wrap onto lazy lines, and a definition's text is an item's.
-          rule %r/#{bol}(#{MARGIN})(::)([ \t]+)/ do
+          rule %r/#{bol}(#{MARGIN})(::)( +)(?=[ \t]*[^ \t\n])/ do
             groups Text, Punctuation, Text
             open_block :dlterm, :heading
           end
-          rule %r/#{bol}(#{MARGIN})(:)(?=[ \t])/ do
+          rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
             groups Text, Punctuation
             open_block :listitem, :quoteline
           end
@@ -351,22 +351,22 @@ module Rouge
           # `>foo` and `>> x` are paragraphs, and `> > x` nests. What follows
           # a marker may open a block of its own, so the openers are tried
           # again there.
-          rule %r/#{bol}(#{MARGIN})(>)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})(>)(?= |$)/ do
             groups Text, Punctuation
             state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
           end
 
           # A task can attach its first block on the marker line.
-          rule %r/#{bol}(#{MARGIN})([-*](?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])([ \t]+)(\+)([ \t]*)$/ do
+          rule %r/#{bol}(#{MARGIN})([-*](?:#{ATTRS})?)( +[ \t]*)(\[[^\]\n]\])( +[ \t]*)(\+)([ \t]*)$/ do
             groups Text, Punctuation, Text, Name::Constant, Text, Operator, Text
             open_block :listitem, :quoteline
           end
 
-          rule %r/#{bol}(#{MARGIN})((?:[-*][ \t]+)*[-*](?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+          rule %r/#{bol}(#{MARGIN})((?:[-*] +)*[-*](?:#{ATTRS})?)( +[ \t]*)(\+)([ \t]*)$/ do
             groups Text, Punctuation, Text, Operator, Text
             open_block :listitem, :quoteline
           end
-          rule %r/#{bol}(#{MARGIN})((?:#{ORDERED}|\.)(?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+          rule %r/#{bol}(#{MARGIN})((?:#{ORDERED}|\.)(?:#{ATTRS})?)( +[ \t]*)(\+)([ \t]*)$/ do
             groups Text, Num::Integer, Text, Operator, Text
             open_block :listitem, :quoteline
           end
@@ -375,25 +375,25 @@ module Rouge
           # token. The state is any single character, not only a space or an
           # x: `[>]` is deferred and `[-]` is dropped. A `+` is not a bullet in
           # Carve; it continues a container.
-          rule %r/#{bol}(#{MARGIN})((?:[-*]|#{ORDERED})(?:#{ATTRS})?)([ \t]+)(\[[^\]\n]\])/ do
+          rule %r/#{bol}(#{MARGIN})((?:[-*]|#{ORDERED})(?:#{ATTRS})?)( +)(\[[^\]\n]\])(?= +[ \t]*[^ \t\n])/ do
             groups Text, Punctuation, Text, Name::Constant
             open_block :listitem, :quoteline
           end
 
           # Bullets. A run of markers on one line opens nested lists at once
           # (`- - A`), and attributes may be glued straight onto the marker.
-          rule %r/#{bol}(#{MARGIN})((?:[-*][ \t]+)*[-*](?:#{ATTRS})?)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})((?:[-*] +)*[-*](?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
             groups Text, Punctuation
             open_block :listitem, :quoteline
           end
 
           # Ordered markers: numeric, alphabetic, roman, and the bare `.` that
           # continues the enclosing sequence.
-          rule %r/#{bol}(#{MARGIN})(#{ORDERED}(?:#{ATTRS})?)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})(#{ORDERED}(?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
             groups Text, Num::Integer
             open_block :listitem, :quoteline
           end
-          rule %r/#{bol}(#{MARGIN})(\.(?:#{ATTRS})?)(?=[ \t]|$)/ do
+          rule %r/#{bol}(#{MARGIN})(\.(?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
             groups Text, Num::Integer
             open_block :listitem, :quoteline
           end

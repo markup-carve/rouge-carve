@@ -215,6 +215,35 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(token_for("- [x] done\n", '[x]')).to eq 'Name.Constant'
     end
 
+    it 'leaves a checkbox without task content as list text' do
+      expect(token_for("- [ ]\n", '[ ]')).not_to eq 'Name.Constant'
+      expect(token_for("- [ ]   \n", '[ ]')).not_to eq 'Name.Constant'
+      expect(token_for("- [ ] done\n", '[ ]')).to eq 'Name.Constant'
+      expect(token_for("- [ ] \tdone\n", '[ ]')).to eq 'Name.Constant'
+    end
+
+    it 'leaves contentless markers and tab-separated markers as text' do
+      ['- ', '* ', '1. ', '. ', '# ', '^ ', ':: ', ': ',
+       "-\titem", "1.\titem", "#\tTitle", ">\tquote"].each do |source|
+        expect(names("#{source}\n")).to eq(['Text']), source.inspect
+      end
+      expect(token_for("> quote\n", '>')).to eq 'Punctuation'
+      expect(token_for(">\n", '>')).to eq 'Punctuation'
+    end
+
+    it 'requires a leading space before a first-block continuation' do
+      ["-\t+", "1.\t+"].each do |source|
+        expect(names("#{source}\n")).to eq(['Text']), source.inspect
+      end
+      expect(lex("- [ ]\t+\n")).not_to include ['Name.Constant', '[ ]'], ['Operator', '+']
+      expect(lex("- [ ] \t+\n")).to include ['Name.Constant', '[ ]'], ['Operator', '+']
+      expect(lex("- \t+\n")).to include ['Punctuation', '-'], ['Operator', '+']
+    end
+
+    it 'does not treat a contentless nested marker as another item' do
+      expect(lex("- - \n")).to eq [['Punctuation', '-'], ['Text', " - \n"]]
+    end
+
     it 'distinguishes a task continuation from its list marker' do
       tokens = lex("- [ ] +\n```sh\nnpm test\n```\n")
       expect(tokens).to include ['Punctuation', '-'], ['Name.Constant', '[ ]'], ['Operator', '+']
