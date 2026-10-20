@@ -267,7 +267,10 @@ RSpec.describe Rouge::Lexers::Carve do
         ":: term\n: +\nnext\n", ":: term\n\n: +\nnext\n",
         "> :: term\n> : +\n> next\n",
         "- - +\nnext\n", "- > +\nnext\n", "> - +\n> next\n",
-        "1. - +\nnext\n", "-{.c} +\nnext\n"
+        "1. - +\nnext\n", "-{.c} +\nnext\n",
+        "- + \nnext\n", "  - +\nnext\n", "- +\n", "- +\n  indented\n",
+        "- item\n  > +\nnext\n", "> +\nnext\n", ">+\nnext\n", ">>+\nnext\n",
+        ">> +\nnext\n", "[^a]: +\nnext\n", "> - +\nnext\n", "> - +\n>   x\n"
       ].each do |source|
         expect(lex(source)).to(include(['Operator', '+']), source.inspect)
       end
@@ -275,7 +278,7 @@ RSpec.describe Rouge::Lexers::Carve do
 
     it 'scopes a separate continuation after a list, quote, or footnote' do
       ["- item\n+\nnext\n", "> quote\n+\nnext\n",
-       "[^a]: note\n+\nnext\n"].each do |source|
+       "[^a]: note\n+\nnext\n", "- item\n+ \nnext\n"].each do |source|
         expect(lex(source)).to(include(['Operator', '+']), source.inspect)
       end
     end
@@ -294,19 +297,38 @@ RSpec.describe Rouge::Lexers::Carve do
       end
     end
 
+    it 'scopes a continuation at the marker column of the container it reaches' do
+      {
+        "- a\n  - b\n  +\n  > q\n" => [3, 2],
+        "- x\n  - y\n    - a\n\t+\n\t> q\n" => [4, 1],
+        " - a\n +\n > q\n" => [2, 1],
+        "> - a\n>   - b\n> +\n> para\n" => [3, 2],
+        "> > q\n> +\n> para\n" => [2, 2],
+        "- a\n  > q\n  +\n  p\n" => [3, 2],
+        "> q\n+\n| a |\n" => [2, 0]
+      }.each do |source, (line, col)|
+        offset = source.lines.first(line - 1).sum(&:length) + col
+        pos = 0
+        scope = nil
+        lex(source).each do |kind, value|
+          scope = kind if offset >= pos && offset < pos + value.length && value[offset - pos] == '+'
+          pos += value.length
+        end
+        expect(scope).to eq('Operator'), source.inspect
+      end
+    end
+
     it 'keeps continuations literal outside the root-relative positions' do
       [
-        "+\nnext\n", "+ text\n", "  +\nnext\n",
-        "- + \nnext\n", "- item\n+ \nnext\n", ": + \nnext\n",
-        "  - +\nnext\n", "- item\n  +\nnext\n",
-        "- +\n", "- +\n  indented\n", "> +\n",
+        "+\nnext\n", "+ text\n", "  +\nnext\n", ": + \nnext\n",
+        "- item\n  +\nnext\n", "> +\n",
         ">   +\nnext\n", "> quote\n\n+\nnext\n",
-        "  > +\nnext\n", "  > - +\nnext\n",
-        "- item\n  > +\nnext\n", "- >   +\nnext\n",
-        "> +\n>\n", "> +\n>   x\n",
-        "> +\nnext\n", ">+\nnext\n", ">>+\nnext\n", ">> +\nnext\n",
+        "  > +\nnext\n", "  > - +\nnext\n", "- >   +\nnext\n",
+        "> +\n>\n", "> +\n>   x\n", "> +\n> next\n", "> +\n- x\n",
         "> text\n> +\n> para\n", "> text\nlazy\n> +\n> para\n",
-        "[^a]: +\nnext\n", "> - +\nnext\n", "> - +\n>   x\n",
+        "> > q\n> > +\n> > p\n", "- a\n+\n- b\n", "- a\n  - b\n  +\npara\n",
+        "- a\n  - b\n  +\n> q\n", "> - a\n  +\nq\n", "1. [ ] +\nnext\n",
+        "- > +\n  next\n", "- a\n  - ```\n    +\n    ```\n",
         "> :: term\n: +\nnext\n",
         "> quote\n# H\n+\nnext\n",
         "> quote\n```\ncode\n```\n+\nnext\n",
