@@ -178,8 +178,13 @@ module Rouge
       # is a word, not a marker.
       ORDERED = '(?:\\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]'
 
+      # A continuation needs a following block at column zero of its quote
+      # level. A blank or indented next line refuses the marker.
+      PLUS_NEXT = /(?=\n[^ \t\n])/.freeze
+
       # A list marker at the start of a line, as the list rules below read it.
       LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
+      OPENER_RUN = "(?:(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})? +[ \\t]*|> )+"
 
       # A table row needs its closing pipe: `| not a table` is a paragraph.
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
@@ -267,6 +272,7 @@ module Rouge
       # enters its state through #open_block, which knows which of the two it
       # is running in.
       def self.block_openers(bol)
+        root_margin = bol == '^' ? '()' : '( )'
         proc do
           # A raw block: the `=FORMAT` info string routes the payload to that
           # output format verbatim. Emitted as one token including the `=`,
@@ -325,7 +331,7 @@ module Rouge
           # definition ends with its line.
           rule %r/#{bol}(#{MARGIN})(\[\^)([^\]\n]+)(\]:)( )/ do
             groups Text, Punctuation, Name::Label, Punctuation, Text
-            open_block :defline
+            open_block(:defline, :defline, host: :footnote)
           end
           rule %r/#{bol}(#{MARGIN})(\*\[)([^\]\n]+)(\]:)( )/ do
             groups Text, Punctuation, Name::Entity, Punctuation, Text
@@ -340,7 +346,16 @@ module Rouge
           # may wrap onto lazy lines, and a definition's text is an item's.
           rule %r/#{bol}(#{MARGIN})(::)( +)(?=[ \t]*[^ \t\n])/ do
             groups Text, Punctuation, Text
+            remember_host(:term)
             open_block :dlterm, :heading
+          end
+          rule %r/#{bol}#{root_margin}(:)( +[ \t]*)(\+)()$#{PLUS_NEXT}/ do
+            if definition_term_before?
+              groups Text, Punctuation, Text, Operator, Text
+            else
+              groups Text, Punctuation, Text, Text, Text
+            end
+            open_block :listitem, :quoteline
           end
           rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
             groups Text, Punctuation
@@ -351,24 +366,40 @@ module Rouge
           # `>foo` and `>> x` are paragraphs, and `> > x` nests. What follows
           # a marker may open a block of its own, so the openers are tried
           # again there.
-          rule %r/#{bol}(#{MARGIN})(>)(?= |$)/ do
+          rule %r/#{bol}(#{MARGIN})(>)(?= |$)/ do |m|
             groups Text, Punctuation
-            state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
+            record_quote_depth(quote_depth_on_line + 1)
+            remember_host(:quote)
+            rooted = state?(:quotestart) ? m[1] == ' ' : m[1].empty?
+            if rooted
+              state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
+            else
+              state?(:quotestart) ? goto(:quoteline) : push(:quoteline)
+            end
           end
 
           # A task can attach its first block on the marker line.
-          rule %r/#{bol}(#{MARGIN})([-*](?:#{ATTRS})?)( +[ \t]*)(\[[^\]\n]\])( +[ \t]*)(\+)([ \t]*)$/ do
+          rule %r/#{bol}#{root_margin}([-*](?:#{ATTRS})?)( +[ \t]*)(\[[^\]\n]\])( +[ \t]*)(\+)()$#{PLUS_NEXT}/ do
             groups Text, Punctuation, Text, Name::Constant, Text, Operator, Text
             open_block :listitem, :quoteline
           end
 
-          rule %r/#{bol}(#{MARGIN})((?:[-*] +)*[-*](?:#{ATTRS})?)( +[ \t]*)(\+)([ \t]*)$/ do
-            groups Text, Punctuation, Text, Operator, Text
-            open_block :listitem, :quoteline
-          end
-          rule %r/#{bol}(#{MARGIN})((?:#{ORDERED}|\.)(?:#{ATTRS})?)( +[ \t]*)(\+)([ \t]*)$/ do
-            groups Text, Num::Integer, Text, Operator, Text
-            open_block :listitem, :quoteline
+          rule %r/#{bol}#{root_margin}(#{OPENER_RUN})(\+)()$#{PLUS_NEXT}/ do |m|
+            token Text, m[1]
+            scanner = StringScanner.new(m[2])
+            until scanner.eos?
+              if (marker = scanner.scan(/(?:#{ORDERED}|\.)(?:#{ATTRS})?/))
+                token Num::Integer, marker
+              elsif (marker = scanner.scan(/[-*](?:#{ATTRS})?|>/))
+                token Punctuation, marker
+              else
+                token Text, scanner.getch
+              end
+            end
+            depth = quote_depth_on_line
+            token(state?(:quotestart) && !quote_level_follows?(depth) ? Text : Operator, m[3])
+            token Text, m[4]
+            m[2].rstrip.end_with?('>') ? open_block(:quoteline) : open_block(:listitem, :quoteline)
           end
 
           # Task items before plain bullets, so the state marker is its own
@@ -454,6 +485,15 @@ module Rouge
           groups Text, Comment::Preproc, Comment
         end
 
+        rule %r/^(\+)()$#{PLUS_NEXT}/ do |m|
+          if continuation_host_before?
+            groups Operator, Text
+          else
+            token Text, m[0]
+            push :paragraph
+          end
+        end
+
         mixin :blockopeners
 
         # A standalone attribute block, which may span lines.
@@ -483,6 +523,9 @@ module Rouge
 
       state :paraline do
         rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+        rule(%r/^(?=\+$#{PLUS_NEXT})/) do
+          continuation_host_before? ? pop! : continue_paragraph(:paragraph)
+        end
         rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}))/) { pop! }
         rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : continue_paragraph(:paragraph) }
         rule(%r/^(?=#{MARGIN}\^[ \t])/) { @lone_image ? pop! : continue_paragraph(:paragraph) }
@@ -506,7 +549,7 @@ module Rouge
         state line do
           rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
           if name == :listitem
-            rule %r/^(\+)([ \t]*)$/ do
+            rule %r/^(\+)()$#{PLUS_NEXT}/ do
               groups Operator, Text
               goto name
             end
@@ -1172,12 +1215,131 @@ module Rouge
       # opener that is a single token. After a blockquote marker the opener
       # replaces the quote's start state, and a single-token opener hands the
       # rest of the line to quoted text.
-      def open_block(name = nil, quoted = name || :quoteline)
+      def open_block(name = nil, quoted = name || :quoteline, host: nil)
+        kind = host || (name == :listitem ? :list : name == :quoteline ? :quote : nil)
+        remember_host(kind) if kind
         if state?(:quotestart)
           goto quoted
         elsif name
           push name
         end
+      end
+
+      def remember_host(kind)
+        @host_stream = @current_stream
+        @last_host_pos = @current_stream.pos
+        @last_host_kind = kind
+        if kind == :term
+          @term_stream = @current_stream
+          @term_pos = @last_host_pos
+          @term_quote_depth = state?(:quotestart) ? quote_depth_on_line : 0
+        elsif kind != :quote
+          @term_pos = nil
+        end
+        @host_scan = StringScanner.new(@current_stream.string)
+        @host_scan.pos = @last_host_pos
+        @host_scan.scan(/[^\n]*\n/)
+        @host_scan_valid = true
+        @host_scan_fence = nil
+        @host_scan_previous = nil
+      end
+
+      def quote_depth_on_line
+        line_start = line_start_byte
+        @quote_line_start == line_start ? @quote_depth_current : 0
+      end
+
+      def record_quote_depth(depth)
+        @quote_line_start = line_start_byte
+        @quote_depth_current = depth
+      end
+
+      def line_start_byte
+        text = @current_stream.string
+        pos = @current_stream.pos
+        pos -= 1 while pos.positive? && text.getbyte(pos - 1) != 10
+        pos
+      end
+
+      def next_line_after_current
+        scan = StringScanner.new(@current_stream.string)
+        scan.pos = @current_stream.pos
+        return nil unless scan.scan(/[^\n]*\n/)
+
+        scan.scan(/[^\n]*/)
+      end
+
+      def quote_level_follows?(depth)
+        line = next_line_after_current
+        return false unless line
+        depth.times do
+          return false unless line.start_with?('> ')
+
+          line = line[2..]
+        end
+        !line.empty? && !line.match?(/\A[ \t]/)
+      end
+
+      def continuation_host_before?
+        return false unless @host_stream.equal?(@current_stream) && @last_host_pos
+        return false if @last_host_kind == :term
+        return false if @last_host_kind == :quote && !quote_block_follows?
+
+        return false unless @host_scan_valid
+
+        limit = @current_stream.pos
+        while (line = @host_scan.check(/[^\n]*\n/))
+          break if @host_scan.pos + line.bytesize > limit
+
+          @host_scan.scan(/[^\n]*\n/)
+          line = line.chomp("\n")
+          if @host_scan_fence
+            fence = @host_scan_fence
+            @host_scan_fence = nil if line.match?(/\A#{Regexp.escape(fence)}[#{Regexp.escape(fence[0])}]*[ \t]*\z/)
+          elsif line.match?(/\A[ \t]*\z/)
+            @host_scan_valid = false
+          elsif (opening = line.match(/\A(`{3,}|~{3,})/))
+            @host_scan_valid = false unless @host_scan_previous&.match?(/\A\+[ \t]*\z/)
+            @host_scan_fence = opening[1]
+          elsif line.match?(/\A(?:\#{1,6} +|::{1,}|\^ +|\||(?:[-*_][ \t]*){3,}|\[[^\]]+\]: )/)
+            @host_scan_valid = false unless @host_scan_previous&.match?(/\A\+[ \t]*\z/)
+          end
+          @host_scan_previous = line
+          return false unless @host_scan_valid
+        end
+        true
+      end
+
+      def definition_term_before?
+        return false unless @term_stream.equal?(@current_stream) && @term_pos
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        return false unless depth == @term_quote_depth
+
+        between = @current_stream.string.byteslice(@term_pos...@current_stream.pos)
+        lines = between.split("\n", -1)
+        lines.shift
+        lines.pop
+        if depth.positive?
+          prefix = '> ' * depth
+          return false unless lines.all? { |line| line.empty? || line.start_with?(prefix) }
+
+          lines.map! { |line| line.empty? ? line : line[prefix.length..] }
+        end
+        return false if lines.count { |line| line.match?(/\A[ \t]*\z/) } > 1
+
+        lines.none? { |line| line.match?(/\A(?:\#{1,6} +|:{3,}|[-*] +|> |\|)/) }
+      end
+
+      def quote_block_follows?
+        line = next_line_after_current
+        return false unless line
+        return false if line.empty? || line.match?(/\A[ \t]/)
+
+        while line.start_with?('> ')
+          line = line[2..]
+          return false if line.empty? || line.match?(/\A[ \t]/)
+        end
+        line != '>'
       end
 
       def continue_paragraph(name)

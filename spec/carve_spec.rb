@@ -236,8 +236,8 @@ RSpec.describe Rouge::Lexers::Carve do
         expect(names("#{source}\n")).to eq(['Text']), source.inspect
       end
       expect(lex("- [ ]\t+\n")).not_to include ['Name.Constant', '[ ]'], ['Operator', '+']
-      expect(lex("- [ ] \t+\n")).to include ['Name.Constant', '[ ]'], ['Operator', '+']
-      expect(lex("- \t+\n")).to include ['Punctuation', '-'], ['Operator', '+']
+      expect(lex("- [ ] \t+\nnext\n")).to include ['Name.Constant', '[ ]'], ['Operator', '+']
+      expect(lex("- \t+\nnext\n")).to include ['Punctuation', '-'], ['Operator', '+']
     end
 
     it 'does not treat a contentless nested marker as another item' do
@@ -259,6 +259,62 @@ RSpec.describe Rouge::Lexers::Carve do
     it 'colors a standalone continuation inside a list' do
       expect(token_for("- item\n+\n> note\n", '+')).to eq 'Operator'
       expect(token_for("+ x\n", "+ x\n")).to eq 'Text'
+    end
+
+    it 'scopes root-relative first-block continuations in each container' do
+      [
+        "- +\nnext\n", "- [ ] +\nnext\n", "1. +\nnext\n",
+        ":: term\n: +\nnext\n", ":: term\n\n: +\nnext\n",
+        "> :: term\n> : +\n> next\n",
+        "- - +\nnext\n", "- > +\nnext\n", "> - +\n> next\n",
+        "1. - +\nnext\n", "-{.c} +\nnext\n"
+      ].each do |source|
+        expect(lex(source)).to(include(['Operator', '+']), source.inspect)
+      end
+    end
+
+    it 'scopes a separate continuation after a list, quote, or footnote' do
+      ["- item\n+\nnext\n", "> quote\n+\nnext\n",
+       "[^a]: note\n+\nnext\n"].each do |source|
+        expect(lex(source)).to(include(['Operator', '+']), source.inspect)
+      end
+    end
+
+    it 'keeps the host through a lazy line or an attached block' do
+      [
+        "> quoted\n+\npara\n+\n# H\n",
+        "[^a]: note\n+\npara\n+\nmore\n",
+        "> quote\nlazy\n+\nnext\n",
+        "[^a]: note\n  more\n+\nnext\n",
+        "1. item\n+\n```\ncode\n```\n+\nnext\n",
+        ":: term\n: body\n+\npara\n"
+      ].each do |source|
+        expect(lex(source).count { |kind, value| kind == 'Operator' && value == '+' })
+          .to eq(source.lines.count { |line| line.start_with?('+') }), source.inspect
+      end
+    end
+
+    it 'keeps continuations literal outside the root-relative positions' do
+      [
+        "+\nnext\n", "+ text\n", "  +\nnext\n",
+        "- + \nnext\n", "- item\n+ \nnext\n", ": + \nnext\n",
+        "  - +\nnext\n", "- item\n  +\nnext\n",
+        "- +\n", "- +\n  indented\n", "> +\n",
+        ">   +\nnext\n", "> quote\n\n+\nnext\n",
+        "  > +\nnext\n", "  > - +\nnext\n",
+        "- item\n  > +\nnext\n", "- >   +\nnext\n",
+        "> +\n>\n", "> +\n>   x\n",
+        "> +\nnext\n", ">+\nnext\n", ">>+\nnext\n", ">> +\nnext\n",
+        "> text\n> +\n> para\n", "> text\nlazy\n> +\n> para\n",
+        "[^a]: +\nnext\n", "> - +\nnext\n", "> - +\n>   x\n",
+        "> :: term\n: +\nnext\n",
+        "> quote\n# H\n+\nnext\n",
+        "> quote\n```\ncode\n```\n+\nnext\n",
+        "text\n- item\n+\nnext\n",
+        ": +\nnext\n", ":: term\n+\nnext\n"
+      ].each do |source|
+        expect(lex(source)).not_to(include(['Operator', '+']), source.inspect)
+      end
     end
 
     it 'reads a header cell marker as one construct including its pipe' do
