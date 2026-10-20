@@ -220,6 +220,13 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(tokens).to include ['Punctuation', '-'], ['Name.Constant', '[ ]'], ['Operator', '+']
     end
 
+    it 'distinguishes a first-block continuation from bullet and ordered markers' do
+      {'-' => 'Punctuation', '*' => 'Punctuation', '1.' => 'Literal.Number.Integer', '.' => 'Literal.Number.Integer'}.each do |marker, kind|
+        tokens = lex("#{marker} +\n```sh\nnpm test\n```\n")
+        expect(tokens).to include [kind, marker], ['Operator', '+']
+      end
+    end
+
     it 'colors a standalone continuation inside a list' do
       expect(token_for("- item\n+\n> note\n", '+')).to eq 'Operator'
       expect(token_for("+ x\n", "+ x\n")).to eq 'Text'

@@ -362,6 +362,15 @@ module Rouge
             open_block :listitem, :quoteline
           end
 
+          rule %r/#{bol}(#{MARGIN})((?:[-*][ \t]+)*[-*](?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+            groups Text, Punctuation, Text, Operator, Text
+            open_block :listitem, :quoteline
+          end
+          rule %r/#{bol}(#{MARGIN})((?:#{ORDERED}|\.)(?:#{ATTRS})?)([ \t]+)(\+)([ \t]*)$/ do
+            groups Text, Num::Integer, Text, Operator, Text
+            open_block :listitem, :quoteline
+          end
+
           # Task items before plain bullets, so the state marker is its own
           # token. The state is any single character, not only a space or an
           # x: `[>]` is deferred and `[-]` is dropped. A `+` is not a bullet in
