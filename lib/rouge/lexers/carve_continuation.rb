@@ -23,7 +23,7 @@ module Rouge
       # A line whose only content after quote prefixes and openers is `+`:
       # the shapes where the `+` is a marker or a refused marker.
       CANDIDATE = /
-        \A(?:[ \t]|>|(?:[-*]|(?:\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)])(?:\{[^}\n]*\})?(?=[ \t])
+        \A(?:[ \t]|>(?=[ \t])|(?:[-*]|(?:\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)])(?:\{[^}\n]*\})?(?=[ \t])
         |\[[^\]\n]\](?=[ \t])|::?(?=[ \t])|\[\^[^\]\n]+\]:(?=[ ]))*\+[ \t]*\r?\z
       /x.freeze
 
@@ -55,7 +55,7 @@ module Rouge
         @lines.each_with_index do |raw, index|
           line = raw.chomp("\r")
           cols = columns(line)
-          matched, pos, quotes, glued = match(stack, line, cols, force)
+          matched, pos, quotes = match(stack, line, cols, force)
           rest = line[pos..] || ''
 
           if fence && (fence[:forced] || matched >= fence[:depth])
@@ -73,16 +73,14 @@ module Rouge
             stack.slice!(matched..)
             para = nil
           elsif lone
-            # `>+` behind an open quote: the `+` stands at the quote's content
-            # column, reaches a list item there but not a nested quote.
-            col = glued && lone[1].empty? ? cols[pos] + 1 : cols[pos + lone[1].length]
+            col = cols[pos + lone[1].length]
             # A blank line above closes a description or a footnote for a `+`.
             target = stack.rindex do |c|
-              c.col == col && c.quotes == quotes && c.kind != :term && !(glued && c.kind == :quote) &&
+              c.col == col && c.quotes == quotes && c.kind != :term &&
                 !(blank && %i[definition note].include?(c.kind))
             end
             # Only an item refuses a list below it (the sibling rule).
-            if target && follower?(index + 1, quotes, col, quote: glued || quotes.zero?,
+            if target && follower?(index + 1, quotes, col, quote: quotes.zero?,
                                                          list: stack[target].kind != :item)
               @markers << offset + pos + lone[1].length
               stack.slice!((target + 1)..)
@@ -131,14 +129,12 @@ module Rouge
         pos = 0
         quotes = 0
         matched = 0
-        glued = false
         stack.each do |c|
           blank = line[pos..].to_s.match?(/\A[ \t]*\z/)
           if c.kind == :quote
             ws = line[pos..][/\A[ \t]*/]
             at = pos + ws.length
-            glue = line[at] == '>' && line[(at + 1)..].match?(/\A\+[ \t]*\z/)
-            unless line[at] == '>' && (line[at + 1].nil? || line[at + 1].match?(/[ \t]/) || glue)
+            unless line[at] == '>' && (line[at + 1].nil? || line[at + 1].match?(/[ \t]/))
               break unless matched < force
 
               matched += 1
@@ -147,7 +143,6 @@ module Rouge
 
             pos = at + 1
             pos += 1 if line[pos]&.match?(/[ \t]/)
-            glued = glue
             quotes += 1
           elsif blank
             # a blank line keeps an item open
@@ -161,7 +156,7 @@ module Rouge
           end
           matched += 1
         end
-        [matched, pos, quotes, glued]
+        [matched, pos, quotes]
       end
 
       # Move +pos+ over whitespace up to +col+.
@@ -239,9 +234,8 @@ module Rouge
           at = pos + ws.length
           text = line[at..]
           col = cols[at]
-          # `>+` and `>>+` open quotes too: a glued `>` run counts when the
-          # line ends in the marker.
-          if text.start_with?('>') && (text[1].nil? || text[1] == ' ' || text.match?(/\A>[> ]*\+[ \t]*\z/))
+          # `>+`, `>>+` and `>> +` open no quote: each `>` needs a space after it.
+          if text.start_with?('>') && (text[1].nil? || text[1] == ' ')
             break if first && at != base
 
             stack << Container.new(kind: :quote, col: col, content: col + 2, quotes: quotes)
