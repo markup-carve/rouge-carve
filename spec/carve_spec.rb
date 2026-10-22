@@ -342,9 +342,38 @@ RSpec.describe Rouge::Lexers::Carve do
         "- a\n  - b\n  +\n  > q\n\n  +\n  > r\n" => 2,
         "- a\n  - b\n  +\n  > q\n  > q2\n  +\n  para\n" => 2,
         "```\n- a\n+\n> q\n```\n" => 0,
-        "- a\n  ```\n  +\n  ```\n" => 0
+        "- a\n  ```\n  +\n  ```\n" => 0,
+        "-{.c} item\n  > q\n  +\n  next\n" => 1,
+        "1.{.c} item\n   > q\n   +\n   next\n" => 1,
+        "- a\n| t |\n+\nnext\n" => 0,
+        "> a\n| t |\n+\nnext\n" => 0,
+        ":: t\n: a\n+\n- b\n" => 1,
+        ":: t\n: a\n+\n1. b\n" => 1,
+        "> :: t\n> : a\n> +\n> - b\n" => 1,
+        "x[^a]\n\n[^a]: n\n+\n- b\n" => 1,
+        "> q\n+\n- a\n" => 1,
+        ":: t\n: d\n\n+\nnext\n" => 0,
+        "x[^a]\n\n[^a]: n\n\n+\nnext\n" => 0,
+        ":: t\n: a\n\n  more\n+\nnext\n" => 1
       }.each do |source, count|
         expect(lex(source).count { |kind, value| kind == 'Operator' && value == '+' })
+          .to eq(count), source.inspect
+      end
+    end
+
+    it 'keeps a `+` in a comment payload a comment' do
+      expect(lex("%%%\n\n- item\n+\nnext\n%%%\n")).not_to include(['Operator', '+'])
+    end
+
+    # carve-js main reads `: b` as a definition only under a term.
+    it 'scopes a description marker only under a term' do
+      {
+        "> a\n: b\n" => 0, "a\n: b\n" => 0, ": b\n" => 0, "- a\n: b\n" => 0,
+        ":: t\n> a\n: b\n" => 0, "> :: t\n: b\n" => 0, ":: t\n: a\n# h\n: b\n" => 1,
+        ":: t\n: a\n: b\n" => 2, ":: t\n: a\n\n: b\n" => 2, ":: t\n: a\n- x\n: b\n" => 2,
+        ":: t\n: a\n\npara\n\n: b\n" => 1, ":: t\n: a\n---\n: b\n" => 1
+      }.each do |source, count|
+        expect(lex(source).count { |kind, value| kind == 'Punctuation' && value == ':' })
           .to eq(count), source.inspect
       end
     end

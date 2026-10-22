@@ -51,6 +51,7 @@ module Rouge
         para = nil
         force = 0
         offset = 0
+        blank = false
         @lines.each_with_index do |raw, index|
           line = raw.chomp("\r")
           cols = columns(line)
@@ -75,10 +76,14 @@ module Rouge
             # `>+` behind an open quote: the `+` stands at the quote's content
             # column, reaches a list item there but not a nested quote.
             col = glued && lone[1].empty? ? cols[pos] + 1 : cols[pos + lone[1].length]
+            # A blank line above closes a description or a footnote for a `+`.
             target = stack.rindex do |c|
-              c.col == col && c.quotes == quotes && c.kind != :term && !(glued && c.kind == :quote)
+              c.col == col && c.quotes == quotes && c.kind != :term && !(glued && c.kind == :quote) &&
+                !(blank && %i[definition note].include?(c.kind))
             end
-            if target && follower?(index + 1, quotes, col, quote: glued || quotes.zero?)
+            # Only an item refuses a list below it (the sibling rule).
+            if target && follower?(index + 1, quotes, col, quote: glued || quotes.zero?,
+                                                         list: stack[target].kind != :item)
               @markers << offset + pos + lone[1].length
               stack.slice!((target + 1)..)
               attached = stack.length
@@ -99,6 +104,7 @@ module Rouge
             end
           end
           force = attached
+          blank = rest.match?(/\A[ \t]*\z/)
           offset += raw.length + 1
         end
         @markers
@@ -167,7 +173,8 @@ module Rouge
       def opener?(rest)
         text = rest.lstrip
         text.match?(BULLET) || text.match?(ORDERED) && text.match?(/\A\S+[ \t]/) ||
-          text.start_with?('>') || text.match?(FENCE) || text.match?(/\A(?:\#{1,6}[ \t]|:::|::?[ \t]|\[\^[^\]]+\]:[ ])/)
+          text.start_with?('>', '|') || text.match?(FENCE) ||
+          text.match?(/\A(?:\#{1,6}[ \t]|:::|::?[ \t]|\[\^[^\]]+\]:[ ])/)
       end
 
       # A list marker cannot interrupt a paragraph unless it continues a list
@@ -198,7 +205,7 @@ module Rouge
 
       # The block a line at +col+ opens is the one the marker attaches.
       # Inside a quote, `> +` does not attach a quote right after the prefix.
-      def follower?(index, quotes, col, quote: true)
+      def follower?(index, quotes, col, quote: true, list: false)
         line = @lines[index]
         return false if line.nil?
 
@@ -218,7 +225,7 @@ module Rouge
         return false unless cols[pos + ws.length] == col
         return false if !quote && ws.empty? && text.start_with?('>')
 
-        !list_marker?(text)
+        list || !list_marker?(text)
       end
 
       # Push the containers a line opens. Returns the paragraph depth, an open
@@ -247,6 +254,8 @@ module Rouge
             after = at + m[0].length
             gap = line[after..][/\A[ \t]*/]
             content = gap.empty? || cols[after + gap.length] - cols[after] > 4 ? cols[after] + 1 : cols[after + gap.length]
+            # attributes glued to the marker take no columns
+            content -= cols[after] - cols[at + m[0].index('{').to_i] if m[0].include?('{')
             stack << Container.new(kind: :item, col: col, content: content, quotes: quotes)
             pos = after + gap.length
             last = m[0].start_with?('-', '*') ? :bullet : :ordered
