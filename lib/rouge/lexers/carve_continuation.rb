@@ -54,7 +54,7 @@ module Rouge
         @lines.each_with_index do |raw, index|
           line = raw.chomp("\r")
           cols = columns(line)
-          matched, pos, quotes = match(stack, line, cols, force)
+          matched, pos, quotes, glued = match(stack, line, cols, force)
           rest = line[pos..] || ''
 
           if fence && (fence[:forced] || matched >= fence[:depth])
@@ -72,9 +72,13 @@ module Rouge
             stack.slice!(matched..)
             para = nil
           elsif lone
-            col = cols[pos + lone[1].length]
-            target = stack.rindex { |c| c.col == col && c.quotes == quotes && c.kind != :term }
-            if target && follower?(index + 1, quotes, col)
+            # `>+` behind an open quote: the `+` stands at the quote's content
+            # column, reaches a list item there but not a nested quote.
+            col = glued && lone[1].empty? ? cols[pos] + 1 : cols[pos + lone[1].length]
+            target = stack.rindex do |c|
+              c.col == col && c.quotes == quotes && c.kind != :term && !(glued && c.kind == :quote)
+            end
+            if target && follower?(index + 1, quotes, col, quote: glued || quotes.zero?)
               @markers << offset + pos + lone[1].length
               stack.slice!((target + 1)..)
               attached = stack.length
@@ -121,19 +125,23 @@ module Rouge
         pos = 0
         quotes = 0
         matched = 0
+        glued = false
         stack.each do |c|
           blank = line[pos..].to_s.match?(/\A[ \t]*\z/)
           if c.kind == :quote
             ws = line[pos..][/\A[ \t]*/]
-            unless line[pos + ws.length] == '>' && (line[pos + ws.length + 1].nil? || line[pos + ws.length + 1].match?(/[ \t]/))
+            at = pos + ws.length
+            glue = line[at] == '>' && line[(at + 1)..].match?(/\A\+[ \t]*\z/)
+            unless line[at] == '>' && (line[at + 1].nil? || line[at + 1].match?(/[ \t]/) || glue)
               break unless matched < force
 
               matched += 1
               next
             end
 
-            pos += ws.length + 1
+            pos = at + 1
             pos += 1 if line[pos]&.match?(/[ \t]/)
+            glued = glue
             quotes += 1
           elsif blank
             # a blank line keeps an item open
@@ -147,7 +155,7 @@ module Rouge
           end
           matched += 1
         end
-        [matched, pos, quotes]
+        [matched, pos, quotes, glued]
       end
 
       # Move +pos+ over whitespace up to +col+.
@@ -189,7 +197,8 @@ module Rouge
       end
 
       # The block a line at +col+ opens is the one the marker attaches.
-      def follower?(index, quotes, col)
+      # Inside a quote, `> +` does not attach a quote right after the prefix.
+      def follower?(index, quotes, col, quote: true)
         line = @lines[index]
         return false if line.nil?
 
@@ -207,6 +216,7 @@ module Rouge
         text = line[(pos + ws.length)..]
         return false if text.nil? || text.empty?
         return false unless cols[pos + ws.length] == col
+        return false if !quote && ws.empty? && text.start_with?('>')
 
         !list_marker?(text)
       end
@@ -271,7 +281,7 @@ module Rouge
           when :quote
             return [nil, nil, pos] if ws.empty? && first_block_follower?(index + 1, stack, cols[base])
           when :note
-            return [nil, nil, pos + ws.length] if first_block_follower?(index + 1, stack, cols[base], lists: true)
+            return [nil, nil, pos + ws.length] if first_block_follower?(index + 1, stack, cols[base])
           else
             return [nil, nil, pos + ws.length]
           end
@@ -290,7 +300,7 @@ module Rouge
       # block at document column 0 or at the column where the line's openers
       # began; right after an enclosing quote's prefix counts as column 0 of
       # that quote. A line that re-enters the opened container is its text.
-      def first_block_follower?(index, stack, base_col, lists: false)
+      def first_block_follower?(index, stack, base_col)
         line = @lines[index]
         return false if line.nil?
 
@@ -321,7 +331,7 @@ module Rouge
         ws = line[pos..][/\A[ \t]*/]
         at = pos + ws.length
         text = line[at..] || ''
-        return false if text.empty? || (!lists && list_marker?(text))
+        return false if text.empty? || list_marker?(text)
 
         return cols[at].zero? || cols[at] == stack.last.col if reached.zero?
 

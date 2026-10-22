@@ -318,6 +318,37 @@ RSpec.describe Rouge::Lexers::Carve do
       end
     end
 
+    # Each count is how many `+` carve-js main reads as a marker.
+    it 'counts the markers carve-js reads in quotes, footnotes and fences' do
+      {
+        "> - a\n>+\n> > q\n" => 1,
+        "x[^a]\n\n[^a]: +\n- a\n" => 0,
+        "x[^a]\n\n[^a]: +\n1. a\n" => 0,
+        "x[^a]\n\n[^a]: +\n  - a\n" => 0,
+        "x[^a]\n\n[^a]: +\n> q\n" => 1,
+        "> > q\n> +\n> > para\n" => 0,
+        "> - a\n> +\n> > r\n" => 0,
+        "> - a\n>   - b\n>   +\n>   > q\n" => 1,
+        "> > q\n>+\n> para\n" => 0,
+        "> > q\n>+\npara\n" => 0,
+        "> - a\n>+\n> para\n" => 1,
+        "> - a\n>+\npara\n" => 0,
+        "> q\n>+\npara\n" => 0,
+        "> 1. a\n>+\n> > r\n" => 1,
+        "> - a\n>\n>+\n> para\n" => 1,
+        "> > - a\n> >+\n> > para\n" => 1,
+        "- a\n  > - b\n  >+\n  > para\n" => 1,
+        "> - a\n>+\n> - b\n" => 0,
+        "- a\n  - b\n  +\n  > q\n\n  +\n  > r\n" => 2,
+        "- a\n  - b\n  +\n  > q\n  > q2\n  +\n  para\n" => 2,
+        "```\n- a\n+\n> q\n```\n" => 0,
+        "- a\n  ```\n  +\n  ```\n" => 0
+      }.each do |source, count|
+        expect(lex(source).count { |kind, value| kind == 'Operator' && value == '+' })
+          .to eq(count), source.inspect
+      end
+    end
+
     it 'keeps continuations literal outside the root-relative positions' do
       [
         "+\nnext\n", "+ text\n", "  +\nnext\n", ": + \nnext\n",
