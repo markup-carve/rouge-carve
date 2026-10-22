@@ -361,7 +361,8 @@ module Rouge
           end
           # Without a term above, `: b` is paragraph text (a lazy line too).
           rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
-            if definition_term_before? || definition_before?
+            # the scan from the last definition is short; the term scan runs once
+            if definition_before? || definition_term_before?
               groups Text, Punctuation
               term = [@term_stream, @term_pos, @term_quote_depth]
               open_block :listitem, :quoteline
