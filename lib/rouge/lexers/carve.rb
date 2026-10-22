@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*- #
 # frozen_string_literal: true
 
+require_relative 'carve_continuation'
+
 module Rouge
   module Lexers
     # Carve is a lightweight markup language for documents and the web. Its
@@ -178,8 +180,8 @@ module Rouge
       # is a word, not a marker.
       ORDERED = '(?:\\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]'
 
-      # A continuation needs a following block at column zero of its quote
-      # level. A blank or indented next line refuses the marker.
+      # The states read a column-0 `+` with a flush-left block below as an
+      # attachment. Whether a `+` is the marker is settled by CarveContinuation.
       PLUS_NEXT = /(?=\n[^ \t\n])/.freeze
 
       # A list marker at the start of a line, as the list rules below read it.
@@ -357,9 +359,22 @@ module Rouge
             end
             open_block :listitem, :quoteline
           end
+          # Without a term above, `: b` is paragraph text (a lazy line too).
           rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
-            groups Text, Punctuation
-            open_block :listitem, :quoteline
+            # the scan from the last definition is short; the term scan runs once
+            if definition_before? || definition_term_before?
+              groups Text, Punctuation
+              term = [@term_stream, @term_pos, @term_quote_depth]
+              open_block :listitem, :quoteline
+              # the next `: d` may still belong to the same term
+              @term_stream, @term_pos, @term_quote_depth = term
+              @def_stream = @current_stream
+              @def_pos = @last_host_pos
+              @def_quote_depth = @term_quote_depth
+            else
+              groups Text, Text
+              open_block :paragraph
+            end
           end
 
           # A blockquote marker must be followed by a space or end the line;
@@ -981,7 +996,49 @@ module Rouge
         end
       end
 
+      # The lexer states cannot carry the open containers' marker columns, so
+      # the `+` scope is settled afterwards from a document-level pass: a `+`
+      # it names is the continuation operator, every other `+` the states
+      # gave Operator is text.
+      def stream_tokens(str, &block)
+        markers = CarveContinuation.markers(str).to_h { |offset| [offset, true] }
+        candidates = CarveContinuation.candidates(str).to_h { |offset| [offset, true] }
+        pos = 0
+        super(str) do |tok, val|
+          if val.include?('+') && candidates.any?
+            retag_plus(tok, val, pos, markers, candidates, &block)
+          else
+            yield tok, val
+          end
+          pos += val.length
+        end
+      end
+
       private
+
+      def retag_plus(tok, val, pos, markers, candidates)
+        run = +''
+        val.each_char.with_index do |ch, i|
+          scope = if ch != '+' || !candidates[pos + i] || opaque?(tok) then tok
+                  elsif markers[pos + i] then Operator
+                  elsif tok == Operator then Text
+                  else tok
+                  end
+          if scope != tok
+            yield tok, run unless run.empty?
+            run = +''
+            yield scope, ch
+          else
+            run << ch
+          end
+        end
+        yield tok, run unless run.empty?
+      end
+
+      # Comment and literal payloads keep their scope.
+      def opaque?(tok)
+        tok <= Comment || tok <= Literal
+      end
 
       # The token a state gives a character that opens nothing.
       PLAIN_TOKENS = {
@@ -1327,7 +1384,34 @@ module Rouge
         end
         return false if lines.count { |line| line.match?(/\A[ \t]*\z/) } > 1
 
-        lines.none? { |line| line.match?(/\A(?:\#{1,6} +|:{3,}|[-*] +|> |\|)/) }
+        lines.none? { |line| line.match?(/\A(?:\#{1,6} +|:{3,}|[-*] +|> |\||`{3,}|~{3,}|(?:[-*_][ \t]*){3,}\z)/) }
+      end
+
+      # After a definition, only a heading, quote, table or div ends the list.
+      def definition_before?
+        return false unless @def_stream.equal?(@current_stream) && @def_pos
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        return false unless depth == @def_quote_depth
+
+        lines = @current_stream.string.byteslice(@def_pos...@current_stream.pos).split("\n", -1)
+        lines.shift
+        lines.pop
+        prefix = '> ' * depth
+        blank = false
+        lines.all? do |line|
+          if line.empty? || line == prefix.rstrip
+            blank = true
+            next true
+          end
+          next false unless line.start_with?(prefix)
+
+          rest = line[prefix.length..]
+          # a flush-left block after a blank line, or one that interrupts, ends it
+          next false if blank && rest.match?(/\A[^ \t]/)
+
+          blank = false
+          !rest.match?(/\A(?:\#{1,6} +|:{3,}|> |\||::|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}\z)/)
+        end
       end
 
       def quote_block_follows?

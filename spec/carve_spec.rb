@@ -267,7 +267,10 @@ RSpec.describe Rouge::Lexers::Carve do
         ":: term\n: +\nnext\n", ":: term\n\n: +\nnext\n",
         "> :: term\n> : +\n> next\n",
         "- - +\nnext\n", "- > +\nnext\n", "> - +\n> next\n",
-        "1. - +\nnext\n", "-{.c} +\nnext\n"
+        "1. - +\nnext\n", "-{.c} +\nnext\n",
+        "- + \nnext\n", "  - +\nnext\n", "- +\n", "- +\n  indented\n",
+        "- item\n  > +\nnext\n", "> +\nnext\n", ">+\nnext\n", ">>+\nnext\n",
+        ">> +\nnext\n", "[^a]: +\nnext\n", "> - +\nnext\n", "> - +\n>   x\n"
       ].each do |source|
         expect(lex(source)).to(include(['Operator', '+']), source.inspect)
       end
@@ -275,7 +278,7 @@ RSpec.describe Rouge::Lexers::Carve do
 
     it 'scopes a separate continuation after a list, quote, or footnote' do
       ["- item\n+\nnext\n", "> quote\n+\nnext\n",
-       "[^a]: note\n+\nnext\n"].each do |source|
+       "[^a]: note\n+\nnext\n", "- item\n+ \nnext\n"].each do |source|
         expect(lex(source)).to(include(['Operator', '+']), source.inspect)
       end
     end
@@ -294,19 +297,98 @@ RSpec.describe Rouge::Lexers::Carve do
       end
     end
 
+    it 'scopes a continuation at the marker column of the container it reaches' do
+      {
+        "- a\n  - b\n  +\n  > q\n" => [3, 2],
+        "- x\n  - y\n    - a\n\t+\n\t> q\n" => [4, 1],
+        " - a\n +\n > q\n" => [2, 1],
+        "> - a\n>   - b\n> +\n> para\n" => [3, 2],
+        "> > q\n> +\n> para\n" => [2, 2],
+        "- a\n  > q\n  +\n  p\n" => [3, 2],
+        "> q\n+\n| a |\n" => [2, 0]
+      }.each do |source, (line, col)|
+        offset = source.lines.first(line - 1).sum(&:length) + col
+        pos = 0
+        scope = nil
+        lex(source).each do |kind, value|
+          scope = kind if offset >= pos && offset < pos + value.length && value[offset - pos] == '+'
+          pos += value.length
+        end
+        expect(scope).to eq('Operator'), source.inspect
+      end
+    end
+
+    # Each count is how many `+` carve-js main reads as a marker.
+    it 'counts the markers carve-js reads in quotes, footnotes and fences' do
+      {
+        "> - a\n>+\n> > q\n" => 1,
+        "x[^a]\n\n[^a]: +\n- a\n" => 0,
+        "x[^a]\n\n[^a]: +\n1. a\n" => 0,
+        "x[^a]\n\n[^a]: +\n  - a\n" => 0,
+        "x[^a]\n\n[^a]: +\n> q\n" => 1,
+        "> > q\n> +\n> > para\n" => 0,
+        "> - a\n> +\n> > r\n" => 0,
+        "> - a\n>   - b\n>   +\n>   > q\n" => 1,
+        "> > q\n>+\n> para\n" => 0,
+        "> > q\n>+\npara\n" => 0,
+        "> - a\n>+\n> para\n" => 1,
+        "> - a\n>+\npara\n" => 0,
+        "> q\n>+\npara\n" => 0,
+        "> 1. a\n>+\n> > r\n" => 1,
+        "> - a\n>\n>+\n> para\n" => 1,
+        "> > - a\n> >+\n> > para\n" => 1,
+        "- a\n  > - b\n  >+\n  > para\n" => 1,
+        "> - a\n>+\n> - b\n" => 0,
+        "- a\n  - b\n  +\n  > q\n\n  +\n  > r\n" => 2,
+        "- a\n  - b\n  +\n  > q\n  > q2\n  +\n  para\n" => 2,
+        "```\n- a\n+\n> q\n```\n" => 0,
+        "- a\n  ```\n  +\n  ```\n" => 0,
+        "-{.c} item\n  > q\n  +\n  next\n" => 1,
+        "1.{.c} item\n   > q\n   +\n   next\n" => 1,
+        "- a\n| t |\n+\nnext\n" => 0,
+        "> a\n| t |\n+\nnext\n" => 0,
+        ":: t\n: a\n+\n- b\n" => 1,
+        ":: t\n: a\n+\n1. b\n" => 1,
+        "> :: t\n> : a\n> +\n> - b\n" => 1,
+        "x[^a]\n\n[^a]: n\n+\n- b\n" => 1,
+        "> q\n+\n- a\n" => 1,
+        ":: t\n: d\n\n+\nnext\n" => 0,
+        "x[^a]\n\n[^a]: n\n\n+\nnext\n" => 0,
+        ":: t\n: a\n\n  more\n+\nnext\n" => 1
+      }.each do |source, count|
+        expect(lex(source).count { |kind, value| kind == 'Operator' && value == '+' })
+          .to eq(count), source.inspect
+      end
+    end
+
+    it 'keeps a `+` in a comment payload a comment' do
+      expect(lex("%%%\n\n- item\n+\nnext\n%%%\n")).not_to include(['Operator', '+'])
+    end
+
+    # carve-js main reads `: b` as a definition only under a term.
+    it 'scopes a description marker only under a term' do
+      {
+        "> a\n: b\n" => 0, "a\n: b\n" => 0, ": b\n" => 0, "- a\n: b\n" => 0,
+        ":: t\n> a\n: b\n" => 0, "> :: t\n: b\n" => 0, ":: t\n: a\n# h\n: b\n" => 1,
+        ":: t\n: a\n: b\n" => 2, ":: t\n: a\n\n: b\n" => 2, ":: t\n: a\n- x\n: b\n" => 2,
+        ":: t\n: a\n\npara\n\n: b\n" => 1, ":: t\n: a\n---\n: b\n" => 1
+      }.each do |source, count|
+        expect(lex(source).count { |kind, value| kind == 'Punctuation' && value == ':' })
+          .to eq(count), source.inspect
+      end
+    end
+
     it 'keeps continuations literal outside the root-relative positions' do
       [
-        "+\nnext\n", "+ text\n", "  +\nnext\n",
-        "- + \nnext\n", "- item\n+ \nnext\n", ": + \nnext\n",
-        "  - +\nnext\n", "- item\n  +\nnext\n",
-        "- +\n", "- +\n  indented\n", "> +\n",
+        "+\nnext\n", "+ text\n", "  +\nnext\n", ": + \nnext\n",
+        "- item\n  +\nnext\n", "> +\n",
         ">   +\nnext\n", "> quote\n\n+\nnext\n",
-        "  > +\nnext\n", "  > - +\nnext\n",
-        "- item\n  > +\nnext\n", "- >   +\nnext\n",
-        "> +\n>\n", "> +\n>   x\n",
-        "> +\nnext\n", ">+\nnext\n", ">>+\nnext\n", ">> +\nnext\n",
+        "  > +\nnext\n", "  > - +\nnext\n", "- >   +\nnext\n",
+        "> +\n>\n", "> +\n>   x\n", "> +\n> next\n", "> +\n- x\n",
         "> text\n> +\n> para\n", "> text\nlazy\n> +\n> para\n",
-        "[^a]: +\nnext\n", "> - +\nnext\n", "> - +\n>   x\n",
+        "> > q\n> > +\n> > p\n", "- a\n+\n- b\n", "- a\n  - b\n  +\npara\n",
+        "- a\n  - b\n  +\n> q\n", "> - a\n  +\nq\n", "1. [ ] +\nnext\n",
+        "- > +\n  next\n", "- a\n  - ```\n    +\n    ```\n",
         "> :: term\n: +\nnext\n",
         "> quote\n# H\n+\nnext\n",
         "> quote\n```\ncode\n```\n+\nnext\n",
