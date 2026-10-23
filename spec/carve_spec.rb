@@ -275,6 +275,43 @@ RSpec.describe Rouge::Lexers::Carve do
       end
     end
 
+    # A quote opened on a list item line (markup-carve/carve#3421, corpus 649
+    # to 656, carve-js 0.1.13): its `+` takes a non-list block at column 0, at
+    # the line's column or at the owning quote's column.
+    it 'scopes a list-hosted quote first-block continuation' do
+      {
+        "- > +\n  next\n" => true, "- > +\n# h\n" => true, "- a\n  - > +\n  b\n" => true,
+        "- - > +\n    b\n" => true, "- a\n  - - > +\n  b\n" => true, "- > > +\n> q\n" => true,
+        "- > > +\n    > q\n" => true, "> - > +\n>   # h\n" => true, "- [x] > +\n# h\n" => true,
+        "- > +\n b\n" => false, "- > +\n   # h\n" => false, "- - > +\n  b\n" => false,
+        "- > > +\n  > q\n" => false, "- > > +\n  - s\n" => false, "> - > +\n- s\n" => false,
+        "> - > +\n>  # h\n" => false, "- > +\n\n# h\n" => false, "-  > +\n# h\n" => false,
+        "> > +\n  q\n" => false, "- a\n  > > +\n    q\n" => false
+      }.each do |source, marker|
+        expect(lex(source).include?(['Operator', '+'])).to eq(marker), source.inspect
+      end
+    end
+
+    # A `:` left of the `::` column of the list it would continue is text
+    # (markup-carve/carve#3458, carve-js 0.1.13).
+    it 'reads a separator below its term column as text' do
+      {
+        "- a\n  :: term\n: detail\n" => 0, "1. a\n   :: term\n : detail\n" => 0,
+        "- a\n  :: term\n  : d\n\n  more\n: detail\n" => 1, "- a\n  :: term\n  : detail\n" => 1,
+        ":: a\n: x\n\n  :: b\n  : y\n: z\n" => 3, "> - a\n>   :: term\n> : detail\n" => 0
+      }.each do |source, count|
+        expect(lex(source).count { |kind, value| kind == 'Punctuation' && value == ':' })
+          .to eq(count), source.inspect
+      end
+    end
+
+    it 'scopes a quote marker opened on a list item line' do
+      expect(lex("- > q\n")).to include ['Punctuation', '-'], ['Punctuation', '>']
+      expect(lex("- > > q\n").count(['Punctuation', '>'])).to eq 2
+      expect(lex("1. > q\n")).to include ['Literal.Number.Integer', '1.'], ['Punctuation', '>']
+      expect(lex("- >q\n")).not_to include ['Punctuation', '>']
+    end
+
     it 'scopes a separate continuation after a list, quote, or footnote' do
       ["- item\n+\nnext\n", "> quote\n+\nnext\n",
        "[^a]: note\n+\nnext\n", "- item\n+ \nnext\n"].each do |source|
@@ -413,7 +450,7 @@ RSpec.describe Rouge::Lexers::Carve do
         "> text\n> +\n> para\n", "> text\nlazy\n> +\n> para\n",
         "> > q\n> > +\n> > p\n", "- a\n+\n- b\n", "- a\n  - b\n  +\npara\n",
         "- a\n  - b\n  +\n> q\n", "> - a\n  +\nq\n", "1. [ ] +\nnext\n",
-        "- > +\n  next\n", "- a\n  - ```\n    +\n    ```\n",
+        "- a\n  - ```\n    +\n    ```\n",
         "> :: term\n: +\nnext\n",
         "> quote\n# H\n+\nnext\n",
         "> quote\n```\ncode\n```\n+\nnext\n",

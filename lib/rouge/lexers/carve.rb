@@ -362,7 +362,7 @@ module Rouge
           # Without a term above, `: b` is paragraph text (a lazy line too).
           rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
             # the scan from the last definition is short; the term scan runs once
-            if definition_before? || definition_term_before?
+            if (definition_before? || definition_term_before?) && !separator_below_term?
               groups Text, Punctuation
               term = [@term_stream, @term_pos, @term_quote_depth]
               open_block :listitem, :quoteline
@@ -415,6 +415,31 @@ module Rouge
             token(state?(:quotestart) && !quote_level_follows?(depth) ? Text : Operator, m[3])
             token Text, m[4]
             m[2].rstrip.end_with?('>') ? open_block(:quoteline) : open_block(:listitem, :quoteline)
+          end
+
+          # A quote opened on a list item's marker line (`- > q`): its `>` is a
+          # marker, and a `+` behind it may be the quote's first block
+          # (markup-carve/carve#3421).
+          rule %r/#{bol}(#{MARGIN})((?:(?:[-*](?:#{ATTRS})?(?: +\[[^\]\n]\])?|#{ORDERED}(?:#{ATTRS})?|\.(?:#{ATTRS})?) +)+)((?:> +)*>)(?:( )(\+)()$|(?= |$))/ do |m|
+            token Text, m[1]
+            scanner = StringScanner.new(m[2] + m[3])
+            until scanner.eos?
+              if (marker = scanner.scan(/(?:#{ORDERED}|\.)(?:#{ATTRS})?/))
+                token Num::Integer, marker
+              elsif (marker = scanner.scan(/\[[^\]\n]\]/))
+                token Name::Constant, marker
+              elsif (marker = scanner.scan(/[-*](?:#{ATTRS})?|>/))
+                token Punctuation, marker
+              else
+                token Text, scanner.scan(/ +/)
+              end
+            end
+            if m[5]
+              token Text, m[4]
+              # CarveContinuation settles whether this `+` is the marker.
+              token Operator, m[5]
+            end
+            open_block(:quoteline)
           end
 
           # Task items before plain bullets, so the state marker is its own
@@ -1385,6 +1410,48 @@ module Rouge
         return false if lines.count { |line| line.match?(/\A[ \t]*\z/) } > 1
 
         lines.none? { |line| line.match?(/\A(?:\#{1,6} +|:{3,}|[-*] +|> |\||`{3,}|~{3,}|(?:[-*_][ \t]*){3,}\z)/) }
+      end
+
+      # A `:` left of the `::` column of every open term above it ends the
+      # definition list and is paragraph text (markup-carve/carve#3458).
+      def separator_below_term?
+        text = @current_stream.string
+        unless @separator_source.equal?(text)
+          @separator_source = text
+          @separator_below = {}
+        end
+        start = line_start_byte
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        strip = lambda do |line|
+          depth.times { line = line.start_with?('> ') ? line[2..] : line.sub(/\A>\z/, '') }
+          line
+        end
+        indent = ->(line) { line[/\A[ \t]*/].gsub("\t", '    ').length }
+        column = indent.call(strip.call(text.byteslice(start...(text.index("\n", start) || text.length))))
+        term = nil
+        below = nil
+        finish = start - 1
+        while finish.positive?
+          from = (text.rindex("\n", finish - 1) || -1) + 1
+          line = strip.call(text.byteslice(from...finish))
+          finish = from - 1
+          next if line.strip.empty?
+
+          if line.match?(/\A[ \t]*::[ \t]/)
+            term = [term, indent.call(line)].compact.min
+            break if term <= column
+          elsif line.match?(/\A[ \t]*:[ \t]/)
+            # An earlier separator at this column with no term between reads the same.
+            if term.nil? && indent.call(line) == column && @separator_below.key?(from)
+              below = @separator_below[from]
+              break
+            end
+          elsif term && indent.call(line) < term
+            break
+          end
+        end
+        below = !term.nil? && column < term if below.nil?
+        @separator_below[start] = below
       end
 
       # After a definition, only a heading, quote, table or div ends the list.

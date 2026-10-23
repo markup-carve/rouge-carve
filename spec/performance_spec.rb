@@ -23,4 +23,13 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(large).to be < [small, 0.01].max * 9
     end
   end
+
+  # Each `:` separator reads its term's column; without the memo that walk is quadratic.
+  [[":: t\n", ": d\n"], ["- a\n  :: t\n", "  : d\n"]].each do |prefix, unit|
+    it "lexes a long definition list under #{prefix.lines.last.strip.inspect} in linear time" do
+      small = cpu_seconds(prefix + unit * 1_000)
+      large = cpu_seconds(prefix + unit * 4_000)
+      expect(large).to be < [small, 0.01].max * 9
+    end
+  end
 end
