@@ -298,7 +298,8 @@ RSpec.describe Rouge::Lexers::Carve do
       {
         "- a\n  :: term\n: detail\n" => 0, "1. a\n   :: term\n : detail\n" => 0,
         "- a\n  :: term\n  : d\n\n  more\n: detail\n" => 1, "- a\n  :: term\n  : detail\n" => 1,
-        ":: a\n: x\n\n  :: b\n  : y\n: z\n" => 3, "> - a\n>   :: term\n> : detail\n" => 0
+        ":: a\n: x\n\n  :: b\n  : y\n: z\n" => 3, "> - a\n>   :: term\n> : detail\n" => 0,
+        "é\n\n:: t\n: d\n" => 1, "- é\n  :: term\n: détail\n" => 0
       }.each do |source, count|
         expect(lex(source).count { |kind, value| kind == 'Punctuation' && value == ':' })
           .to eq(count), source.inspect

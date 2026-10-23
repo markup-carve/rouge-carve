@@ -1427,12 +1427,12 @@ module Rouge
           line
         end
         indent = ->(line) { line[/\A[ \t]*/].gsub("\t", '    ').length }
-        column = indent.call(strip.call(text.byteslice(start...(text.index("\n", start) || text.length))))
+        column = indent.call(strip.call(text.byteslice(start...(text.byteindex("\n", start) || text.bytesize))))
         term = nil
         below = nil
         finish = start - 1
         while finish.positive?
-          from = (text.rindex("\n", finish - 1) || -1) + 1
+          from = (text.byterindex("\n", finish - 1) || -1) + 1
           line = strip.call(text.byteslice(from...finish))
           finish = from - 1
           next if line.strip.empty?
