@@ -1418,6 +1418,7 @@ module Rouge
         text = @current_stream.string
         unless @separator_source.equal?(text)
           @separator_source = text
+          @separator_bytes = text.b
           @separator_below = {}
         end
         start = line_start_byte
@@ -1427,12 +1428,12 @@ module Rouge
           line
         end
         indent = ->(line) { line[/\A[ \t]*/].gsub("\t", '    ').length }
-        column = indent.call(strip.call(text.byteslice(start...(text.byteindex("\n", start) || text.bytesize))))
+        column = indent.call(strip.call(text.byteslice(start...(@separator_bytes.index("\n", start) || text.bytesize))))
         term = nil
         below = nil
         finish = start - 1
         while finish.positive?
-          from = (text.byterindex("\n", finish - 1) || -1) + 1
+          from = (@separator_bytes.rindex("\n", finish - 1) || -1) + 1
           line = strip.call(text.byteslice(from...finish))
           finish = from - 1
           next if line.strip.empty?
