@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-23
+
+- `csv` and `tsv` fence bodies are highlighted: every field has its own token type and the separator is an operator, colored apart from the fields in the default styles (#25, #26, #27, #28).
+- A lone `+` is a continuation marker, tokenized as an operator, only where the engine reads one: at an open container's marker column with a non-list block below, or as the first block after an opener (#29, #30, #32). A prose line ending in `+` is not scoped (#31).
+- A quote-prefixed `+` needs one space after each `>`: `>+`, `>>+` and `>> +` are paragraph text (#33).
+- A quote opened on a list item line (`- > q`) scopes its `>`, and `- > +` is a marker when the next line starts a non-list block at column 0, at the line's column or at the owning quote's column (markup-carve/carve#3421). A stacked `> > +` takes its follower only at column 0 or the first quote's column (#34).
+- A `:` left of the `::` column of the definition list it would continue is paragraph text (markup-carve/carve#3458) (#34).
+
 ## [0.1.3] - 2026-10-14
 
 0.1.2 was tagged without its `RougeCarve::VERSION` bump, so it never reached RubyGems. 0.1.3 is the first published release with its change.

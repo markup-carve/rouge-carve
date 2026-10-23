@@ -227,6 +227,7 @@ module Rouge
       # fence and the offset of a first-block marker.
       def open_blocks(stack, line, cols, pos, quotes, para, index)
         base = pos
+        start = stack.length
         first = true
         last = nil
         loop do
@@ -282,7 +283,9 @@ module Rouge
         if last && text.match?(/\A\+[ \t]*\z/)
           case last
           when :quote
-            return [nil, nil, pos] if ws.empty? && first_block_follower?(index + 1, stack, cols[base])
+            hosted = (start...stack.length).find { |i| stack[i].kind == :item }
+            spaced = !hosted || !line[base...pos].match?(/\S[ \t]{2,}/)
+            return [nil, nil, pos] if spaced && ws.empty? && first_block_follower?(index + 1, stack, cols[base], hosted, start)
           when :note
             return [nil, nil, pos + ws.length] if first_block_follower?(index + 1, stack, cols[base])
           else
@@ -303,7 +306,13 @@ module Rouge
       # block at document column 0 or at the column where the line's openers
       # began; right after an enclosing quote's prefix counts as column 0 of
       # that quote. A line that re-enters the opened container is its text.
-      def first_block_follower?(index, stack, base_col)
+      # A quote opened behind a list item on the same line (+hosted+, the
+      # stack index of the first item the line opens) reads the follower at
+      # its raw column: the containers from that item on are not entered, and
+      # the item's and the owning quote's columns are eligible too
+      # (markup-carve/carve#3421, corpus 649 to 656). Its markers are one space
+      # apart: `-  > +` is text.
+      def first_block_follower?(index, stack, base_col, hosted = nil, start = nil)
         line = @lines[index]
         return false if line.nil?
 
@@ -312,7 +321,7 @@ module Rouge
         pos = 0
         reached = 0
         after_quote = true
-        stack.each do |c|
+        (hosted ? stack[0...hosted] : stack).each do |c|
           ws = line[pos..][/\A[ \t]*/]
           at = pos + ws.length
           if c.kind == :quote
@@ -329,16 +338,19 @@ module Rouge
           end
           reached += 1
         end
-        return false if reached == stack.length
+        return false if !hosted && reached == stack.length
 
         ws = line[pos..][/\A[ \t]*/]
         at = pos + ws.length
         text = line[at..] || ''
         return false if text.empty? || list_marker?(text)
+        return false if hosted && text.match?(/\A\+[ \t]*\z/)
 
-        return cols[at].zero? || cols[at] == stack.last.col if reached.zero?
+        # Stacked quotes opened on one line (`> > +`) take the first one's column.
+        own = hosted || start.nil? ? stack.last.col : stack[start].col
+        return cols[at].zero? || cols[at] == own if reached.zero?
 
-        cols[at] == base_col || (after_quote && ws.empty?)
+        cols[at] == base_col || (after_quote && ws.empty?) || (hosted && [stack[hosted].col, stack.last.col].include?(cols[at]))
       end
     end
   end

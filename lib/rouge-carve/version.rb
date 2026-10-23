@@ -3,5 +3,5 @@
 # Kept apart from the entry file so the gemspec can read it without loading
 # Rouge, which is not installed yet when Bundler evaluates the gemspec.
 module RougeCarve
-  VERSION = '0.1.3'
+  VERSION = '0.1.4'
 end
