@@ -5,9 +5,6 @@
 A [Rouge](https://github.com/rouge-ruby/rouge) lexer for the
 [Carve](https://markup-carve.github.io/carve/) markup language.
 
-```bash
-gem install rouge-carve
-```
 
 ```ruby
 require 'rouge-carve'
