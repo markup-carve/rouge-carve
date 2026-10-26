@@ -1,6 +1,6 @@
 # rouge-carve
 
-Rouge lexer for Carve syntax. It registers `.crv`, `.carve`, and Carve fenced code for Rouge 3.30 or later. Read the [Carve documentation](https://markup-carve.github.io/carve/) for the language syntax.
+Rouge lexer for Carve 0.1 syntax. It registers `.crv`, `.carve`, and Carve fenced code for Rouge 3.30 or later. Read the [Carve documentation](https://markup-carve.github.io/carve/) for the language syntax.
 
 ## Install
 
