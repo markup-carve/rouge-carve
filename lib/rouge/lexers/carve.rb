@@ -190,7 +190,6 @@ module Rouge
 
       # A cell's alignment symbols: horizontal, then an optional vertical one.
       CELL_ALIGN = '(?:[<>~][\\^~v]?|\\?[\\^~v])'
-      CELL_GLUED = '(?<=(?<!\\\\)\\|=|(?<!\\\\)\\|)'
 
       # A table row needs its closing pipe: `| not a table` is a paragraph.
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
@@ -657,8 +656,14 @@ module Rouge
         rule %r/\|=[<>^v~]*/, Operator
         # A cell attribute block glued to its `|` or `|=` (carve#5091 D3). Its
         # leading alignment run is an operator, like the deprecated `|=>`.
-        rule %r/#{CELL_GLUED}(\{)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^{}"'\n])*)?)(\})(?= )/ do
-          groups Name::Attribute, Operator, Name::Attribute, Name::Attribute
+        rule %r/(?<=\|=|\|)(\{)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^{}"'|\n])*)?)(\})(?= )/ do |m|
+          if escaped_pipe_before?(@current_stream.pos - m[0].bytesize)
+            @current_stream.unscan
+            @current_stream.getch
+            token Text, m[0][0]
+          else
+            groups Name::Attribute, Operator, Name::Attribute, Name::Attribute
+          end
         end
         # A separator row cell, in the native and the GFM spelling.
         rule %r/(?<=\|)[ \t]*:?-{2,}:?[ \t]*(?=\|)/, Punctuation
@@ -1506,6 +1511,17 @@ module Rouge
       def continue_paragraph(name)
         @lone_image = false
         goto name
+      end
+
+      # Whether the `|` ending before byte +pos+ (or before its `=`) is
+      # escaped, counting the backslashes in front of it.
+      def escaped_pipe_before?(pos)
+        text = @current_stream.string
+        pos -= 1 if text.getbyte(pos - 1) == 0x3D
+        pos -= 1
+        run = 0
+        run += 1 while pos - run - 1 >= 0 && text.getbyte(pos - run - 1) == 0x5C
+        run.odd?
       end
 
       # Whether a fence opened by +run+ on the current line is closed further

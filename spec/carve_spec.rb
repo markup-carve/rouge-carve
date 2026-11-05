@@ -477,6 +477,15 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(lex("| {>} a |\n")).not_to include ['Operator', '>']
       expect(lex("|{>}a |\n")).not_to include ['Operator', '>']
       expect(lex("a {>} b\n")).not_to include ['Operator', '>']
+      expect(lex("| a \\|{>} b |\n")).not_to include ['Operator', '>']
+    end
+
+    it 'reads a braced alignment run after an escaped backslash' do
+      expect(lex("| a \\\\|{>} b |\n")).to include ['Operator', '>']
+    end
+
+    it 'keeps a cell pipe out of an alignment block' do
+      expect(lex("|{> a | b} c |\n").count { |pair| pair == ['Punctuation', '|'] }).to eq 3
     end
 
     it 'reads attributes on a row closing pipe' do
