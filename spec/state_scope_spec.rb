@@ -205,5 +205,10 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at("{.a\n.b}\n# H\n", '.b}')).not_to eq 'Name.Attribute'
       expect(kind_at("  {.c\n  .d}\n", '.d}')).not_to eq 'Name.Attribute'
     end
+
+    it 'does not interrupt a paragraph or an inline body when it cannot continue' do
+      expect(kind_at("a ^[x\n{.a\n.b}\ny]\n", 'y')).to eq 'Generic.Emph'
+      expect(kind_at("para\n{.a\n .b}\n# H\n", "{.a\n .b}")).to eq 'Name.Attribute'
+    end
   end
 end

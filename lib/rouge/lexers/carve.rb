@@ -158,6 +158,10 @@ module Rouge
           |#{LINE_BREAK}
         )*\}
       /x.freeze
+      # The same block as an interrupting line, whose continuations must be
+      # indented (carve#5080). Exact at column 0; an indented block is checked
+      # against its own `{` column in the :block rule.
+      ATTRS_INTERRUPT = Regexp.new(ATTRS_LINE.source.gsub(LINE_BREAK, '\n(?=[ \t]+[^ \t\n])'), Regexp::EXTENDED)
 
       # The prefix of a line inside a blockquote, nested markers included.
       # Each `>` needs a space or the line end after it: `>foo` and `>> x`
@@ -207,7 +211,7 @@ module Rouge
         | (?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$
         | \|=?[<>^v~]*#{ROW_END}
         | (?:\[\^|\*\[|\[)[^\]\n]+\]:[ ]
-        | #{ATTRS_LINE}[ \t]*$
+        | #{ATTRS_INTERRUPT}[ \t]*$
       /x.freeze
 
       # Where a bracketed inline body must close, by the block it sits in: a
@@ -264,8 +268,15 @@ module Rouge
       PLAIN_NO_PIPE = plain_run('|').freeze
       PLAIN_NO_BRACKET = plain_run('\\]').freeze
 
+      # The document start. Front matter opens only here: Rouge 3 and 4 scan
+      # without a fixed anchor, so \A alone would also match mid-document.
       state :root do
-        mixin :block
+        rule %r/\A(﻿?)(---)(?:( ?)([A-Za-z0-9]+))?([ \t]*(?:\n|\z))/ do
+          groups Text, Punctuation, Text, Keyword::Type, Text
+          goto :block
+          push :frontmatter
+        end
+        rule(//) { goto :block }
       end
 
       # ------------------------------------------------------------------
@@ -497,13 +508,6 @@ module Rouge
       state(:quoteopeners, &block_openers(''))
 
       state :block do
-        # Front matter, only at the very start of the document. \A is what
-        # keeps a `---yaml` line mid-document from opening one.
-        rule %r/\A(﻿?)(---)(?:( ?)([A-Za-z0-9]+))?([ \t]*(?:\n|\z))/ do
-          groups Text, Punctuation, Text, Keyword::Type, Text
-          push :frontmatter
-        end
-
         # A comment fence (%%% or longer) versus a one-line comment. The fence
         # has to be tried first: %%% also matches the one-line form. Only a
         # run of the SAME length closes it, so the width is closed over the
