@@ -21,13 +21,13 @@ A word with no registered handler renders as a generic div, which is what
 makes a whole family of constructs possible without touching the parser.
 :::
 
-``` ruby "example.rb"
+```ruby "example.rb"
 def greet(name) = "Hello, #{name}!"
 ```
 
-|= Engine   |= Status |
-| carve-js   | shipped |
-| carve-rs   | shipped |
+|= Engine   |={~} Status |
+| carve-js   | shipped    |
+| carve-rs   | shipped    |
 
 ^ Table 1: the reference implementations.
 
