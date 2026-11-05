@@ -188,6 +188,12 @@ module Rouge
       LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
       OPENER_RUN = "(?:(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})? +[ \\t]*|> )+"
 
+      # A cell's alignment symbols: horizontal, then an optional vertical one.
+      CELL_ALIGN = '(?:[<>~][\\^~v]?|\\?[\\^~v])'
+      # A cell's attribute block when it opens with alignment (carve#5091 D3),
+      # glued to its `|` or `|=` and followed by the cell's space.
+      CELL_BRACE = %(({)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\\\n]|\\\\.)*"|'(?:[^'\\\\\n]|\\\\.)*'|[^{}"'|\n])*)?)(})(?= ))
+
       # A table row needs its closing pipe: `| not a table` is a paragraph.
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
 
@@ -472,6 +478,11 @@ module Rouge
           # Tables. The header marker, the alignment run and the separator row
           # are their own tokens; cell content is lexed inline. A row needs its
           # closing pipe.
+          rule %r/#{bol}(#{MARGIN})(\|=?)#{CELL_BRACE}#{ROW_END}/ do |m|
+            token Text, m[1]
+            braced_cell(m)
+            open_block :tablerow
+          end
           rule %r/#{bol}(#{MARGIN})(\|=[<>^v~]*)#{ROW_END}/ do
             groups Text, Operator
             open_block :tablerow
@@ -650,6 +661,9 @@ module Rouge
         rule %r/$/, Text, :pop!
         # A header cell marker, optionally carrying an alignment run. The pipe
         # is part of it, so `|=` reads as one construct.
+        # An escaped pipe is consumed by the escape rule first, so a `|` here
+        # always ends a cell.
+        rule(%r/(\|=?)#{CELL_BRACE}/) { |m| braced_cell(m) }
         rule %r/\|=[<>^v~]*/, Operator
         # A separator row cell, in the native and the GFM spelling.
         rule %r/(?<=\|)[ \t]*:?-{2,}:?[ \t]*(?=\|)/, Punctuation
@@ -1497,6 +1511,16 @@ module Rouge
       def continue_paragraph(name)
         @lone_image = false
         goto name
+      end
+
+      # The tokens of a cell marker and its braced alignment block, from a
+      # match whose last five groups are the marker and CELL_BRACE.
+      def braced_cell(m)
+        pipe, open, align, rest, close = m.captures.last(5)
+        token pipe == '|' ? Punctuation : Operator, pipe
+        token Name::Attribute, open
+        token Operator, align
+        token Name::Attribute, rest + close
       end
 
       # Whether a fence opened by +run+ on the current line is closed further

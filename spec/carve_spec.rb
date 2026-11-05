@@ -466,6 +466,28 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(token_for("|= A |= B |\n", '|=')).to eq 'Operator'
     end
 
+    it 'reads braced cell alignment as an operator inside an attribute block' do
+      tokens = lex("|={>} P |={<^ .x} N |={?v} M |\n|{~} 1 | a | b |\n")
+      %w[> <^ ?v ~].each { |run| expect(tokens).to include ['Operator', run] }
+      expect(tokens).to include ['Name.Attribute', ' .x}']
+      expect(tokens.count { |pair| pair == ['Name.Attribute', '{'] }).to eq 4
+    end
+
+    it 'leaves a braced alignment run that is not glued to its pipe or misses its space as text' do
+      expect(lex("| {>} a |\n")).not_to include ['Operator', '>']
+      expect(lex("|{>}a |\n")).not_to include ['Operator', '>']
+      expect(lex("a {>} b\n")).not_to include ['Operator', '>']
+      expect(lex("| a \\|{>} b |\n")).not_to include ['Operator', '>']
+    end
+
+    it 'reads a braced alignment run after an escaped backslash' do
+      expect(lex("| a \\\\|{>} b |\n")).to include ['Operator', '>']
+    end
+
+    it 'keeps a cell pipe out of an alignment block' do
+      expect(lex("|{> a | b} c |\n").count { |pair| pair == ['Punctuation', '|'] }).to eq 3
+    end
+
     it 'reads attributes on a row closing pipe' do
       expect(token_for("| a | b |{.ok}\n", '{.ok}')).to eq 'Name.Attribute'
     end
