@@ -190,6 +190,9 @@ module Rouge
 
       # A cell's alignment symbols: horizontal, then an optional vertical one.
       CELL_ALIGN = '(?:[<>~][\\^~v]?|\\?[\\^~v])'
+      # A cell's attribute block when it opens with alignment (carve#5091 D3),
+      # glued to its `|` or `|=` and followed by the cell's space.
+      CELL_BRACE = %(({)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\\\n]|\\\\.)*"|'(?:[^'\\\\\n]|\\\\.)*'|[^{}"'|\n])*)?)(})(?= ))
 
       # A table row needs its closing pipe: `| not a table` is a paragraph.
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
@@ -475,6 +478,11 @@ module Rouge
           # Tables. The header marker, the alignment run and the separator row
           # are their own tokens; cell content is lexed inline. A row needs its
           # closing pipe.
+          rule %r/#{bol}(#{MARGIN})(\|=?)#{CELL_BRACE}#{ROW_END}/ do |m|
+            token Text, m[1]
+            braced_cell(m)
+            open_block :tablerow
+          end
           rule %r/#{bol}(#{MARGIN})(\|=[<>^v~]*)#{ROW_END}/ do
             groups Text, Operator
             open_block :tablerow
@@ -653,18 +661,10 @@ module Rouge
         rule %r/$/, Text, :pop!
         # A header cell marker, optionally carrying an alignment run. The pipe
         # is part of it, so `|=` reads as one construct.
+        # An escaped pipe is consumed by the escape rule first, so a `|` here
+        # always ends a cell.
+        rule(%r/(\|=?)#{CELL_BRACE}/) { |m| braced_cell(m) }
         rule %r/\|=[<>^v~]*/, Operator
-        # A cell attribute block glued to its `|` or `|=` (carve#5091 D3). Its
-        # leading alignment run is an operator, like the deprecated `|=>`.
-        rule %r/(?<=\|=|\|)(\{)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^{}"'|\n])*)?)(\})(?= )/ do |m|
-          if escaped_pipe_before?(@current_stream.pos - m[0].bytesize)
-            @current_stream.unscan
-            @current_stream.getch
-            token Text, m[0][0]
-          else
-            groups Name::Attribute, Operator, Name::Attribute, Name::Attribute
-          end
-        end
         # A separator row cell, in the native and the GFM spelling.
         rule %r/(?<=\|)[ \t]*:?-{2,}:?[ \t]*(?=\|)/, Punctuation
         rule %r/(?<=\|)[ \t]*[<>^v~]{1,2}[ \t]*(?=\|)/, Operator
@@ -1513,15 +1513,14 @@ module Rouge
         goto name
       end
 
-      # Whether the `|` ending before byte +pos+ (or before its `=`) is
-      # escaped, counting the backslashes in front of it.
-      def escaped_pipe_before?(pos)
-        text = @current_stream.string
-        pos -= 1 if text.getbyte(pos - 1) == 0x3D
-        pos -= 1
-        run = 0
-        run += 1 while pos - run - 1 >= 0 && text.getbyte(pos - run - 1) == 0x5C
-        run.odd?
+      # The tokens of a cell marker and its braced alignment block, from a
+      # match whose last five groups are the marker and CELL_BRACE.
+      def braced_cell(m)
+        pipe, open, align, rest, close = m.captures.last(5)
+        token pipe == '|' ? Punctuation : Operator, pipe
+        token Name::Attribute, open
+        token Operator, align
+        token Name::Attribute, rest + close
       end
 
       # Whether a fence opened by +run+ on the current line is closed further
