@@ -188,6 +188,10 @@ module Rouge
       LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
       OPENER_RUN = "(?:(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})? +[ \\t]*|> )+"
 
+      # A cell's alignment symbols: horizontal, then an optional vertical one.
+      CELL_ALIGN = '(?:[<>~][\\^~v]?|\\?[\\^~v])'
+      CELL_GLUED = '(?<=(?<!\\\\)\\|=|(?<!\\\\)\\|)'
+
       # A table row needs its closing pipe: `| not a table` is a paragraph.
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
 
@@ -651,6 +655,11 @@ module Rouge
         # A header cell marker, optionally carrying an alignment run. The pipe
         # is part of it, so `|=` reads as one construct.
         rule %r/\|=[<>^v~]*/, Operator
+        # A cell attribute block glued to its `|` or `|=` (carve#5091 D3). Its
+        # leading alignment run is an operator, like the deprecated `|=>`.
+        rule %r/#{CELL_GLUED}(\{)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^{}"'\n])*)?)(\})(?= )/ do
+          groups Name::Attribute, Operator, Name::Attribute, Name::Attribute
+        end
         # A separator row cell, in the native and the GFM spelling.
         rule %r/(?<=\|)[ \t]*:?-{2,}:?[ \t]*(?=\|)/, Punctuation
         rule %r/(?<=\|)[ \t]*[<>^v~]{1,2}[ \t]*(?=\|)/, Operator
