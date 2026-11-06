@@ -158,6 +158,10 @@ module Rouge
           |#{LINE_BREAK}
         )*\}
       /x.freeze
+      # The same block as an interrupting line, whose continuations must be
+      # indented (carve#5080). Exact at column 0; an indented block is checked
+      # against its own `{` column in the :block rule.
+      ATTRS_INTERRUPT = Regexp.new(ATTRS_LINE.source.gsub(LINE_BREAK, '\n(?=[ \t]+[^ \t\n])'), Regexp::EXTENDED)
 
       # The prefix of a line inside a blockquote, nested markers included.
       # Each `>` needs a space or the line end after it: `>foo` and `>> x`
@@ -177,8 +181,9 @@ module Rouge
       end
 
       # An ordered marker: a number, one letter, or a roman numeral. `Body.`
-      # is a word, not a marker.
-      ORDERED = '(?:\\d+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]'
+      # is a word, not a marker, and a letter with `.` needs two spaces, so
+      # `J. R. R. Tolkien` is prose (carve#4811).
+      ORDERED = "(?:\\d+[.)]|(?:[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)(?:\\)|\\.(?=(?:#{ATTRS})?  )))"
 
       # The states read a column-0 `+` with a flush-left block below as an
       # attachment. Whether a `+` is the marker is settled by CarveContinuation.
@@ -198,30 +203,28 @@ module Rouge
       ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
 
       # The block openers that interrupt a paragraph. A list marker and a
-      # caption do not, and a fence does only when it is closed - that one is
-      # checked in code, see the :paraline state.
+      # caption do not. A fence opener does without looking for its closer
+      # (carve#4018); a backtick in a backtick info string makes it a code span.
       INTERRUPT = %r/
         \#{1,6}[ \t] | >(?:[ \t]|$) | ::: | ::[ \t] | %%
+        | `{3,}[^`\n]*$ | ~{3,}
         | (?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$
         | \|=?[<>^v~]*#{ROW_END}
         | (?:\[\^|\*\[|\[)[^\]\n]+\]:[ ]
-        | #{ATTRS_LINE}[ \t]*$
+        | #{ATTRS_INTERRUPT}[ \t]*$
       /x.freeze
 
       # Where a bracketed inline body must close, by the block it sits in: a
       # paragraph ends at a blank line or an interrupting block, a list item
       # also at the next marker, and a heading or table row at its line end.
-      # A fence ends either only when it is closed, which is checked in code.
       BODY_ENDS = {
         para: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}))/,
         item: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/,
         line: /\n/
       }.freeze
-      FENCE_NEXT = /\n(?=#{MARGIN}(`{3,}|~{3,}))/.freeze
-
       # The block states that decide which of those ends applies.
       BODY_SCOPE = {
-        paragraph: :para, listitem: :item, dlterm: :item, heading: :line,
+        paragraph: :para, listitem: :item, dlterm: :line, heading: :line,
         caption: :line, quoteline: :line, tablerow: :line, defline: :line
       }.freeze
 
@@ -265,8 +268,15 @@ module Rouge
       PLAIN_NO_PIPE = plain_run('|').freeze
       PLAIN_NO_BRACKET = plain_run('\\]').freeze
 
+      # The document start. Front matter opens only here: Rouge 3 and 4 scan
+      # without a fixed anchor, so \A alone would also match mid-document.
       state :root do
-        mixin :block
+        rule %r/\A(﻿?)(---)(?:( ?)([A-Za-z0-9]+))?([ \t]*(?:\n|\z))/ do
+          groups Text, Punctuation, Text, Keyword::Type, Text
+          goto :block
+          push :frontmatter
+        end
+        rule(//) { goto :block }
       end
 
       # ------------------------------------------------------------------
@@ -498,32 +508,19 @@ module Rouge
       state(:quoteopeners, &block_openers(''))
 
       state :block do
-        # Front matter, only at the very start of the document. \A is what
-        # keeps a `---yaml` line mid-document from opening one.
-        rule %r/\A(﻿?)(---)([a-zA-Z][\w-]*)?([ \t]*\n)(?=[\s\S]*?^---[ \t]*$)/ do
-          groups Text, Punctuation, Keyword::Type, Text
-          push :frontmatter
-        end
-
         # A comment fence (%%% or longer) versus a one-line comment. The fence
         # has to be tried first: %%% also matches the one-line form. Only a
         # run of the SAME length closes it, so the width is closed over the
-        # way #push_fence does it, and an opener with no such closer below it
-        # is the one-line form. Text after either run is part of the comment.
+        # way #push_fence does it. No closer is looked for: an unclosed span
+        # ends at a line left of its opener, which misses the opener's owner,
+        # or at the end of the document. Text after either run is comment.
         rule %r/^(#{MARGIN})(%%%+)([^\n]*)(\n)/ do |m|
           closer = %r/^([ \t]*)(%{#{m[2].length}})(?!%)([^\n]*)$/
-          unless closer_below?(closer, m[2].length)
-            # The tokens of the one-line rule below. Rouge 3 has no
-            # fallthrough! to hand the line on to it.
-            token Text, m[1]
-            token Comment::Preproc, '%%'
-            token Comment, m[2][2..] + m[3]
-            token Text, m[4]
-            next
-          end
+          outside = m[1].empty? ? nil : %r/^(?=[ \t]{0,#{m[1].length - 1}}[^ \t\n])/
 
           groups Text, Comment::Preproc, Comment, Text
           push do
+            rule(outside) { pop! } if outside
             rule closer do
               groups Text, Comment::Preproc, Comment
               pop!
@@ -547,17 +544,20 @@ module Rouge
 
         mixin :blockopeners
 
-        # A standalone attribute block, which may span lines.
-        rule %r/^(#{MARGIN})(#{ATTRS_LINE})/ do
-          groups Text, Name::Attribute
+        # A standalone attribute block, which may span lines indented past its
+        # `{` (carve#5080). One that does not is a paragraph.
+        rule %r/^(#{MARGIN})(#{ATTRS_LINE})/ do |m|
+          width = m[1].length
+          if m[2].split("\n").drop(1).all? { |line| line[/\A[ \t]*/].length > width }
+            groups Text, Name::Attribute
+          else
+            @current_stream.unscan
+            start_paragraph
+          end
         end
 
         # Any other line with content starts a paragraph.
-        rule %r/^(?=#{MARGIN}\S)/ do
-          @lone_image = !@current_stream.check(IMAGE_LINE).nil?
-          @indented = @current_stream.check(/[ \t]/) ? true : false
-          push :paragraph
-        end
+        rule(%r/^(?=#{MARGIN}\S)/) { start_paragraph }
 
         mixin :inline
       end
@@ -578,7 +578,6 @@ module Rouge
           continuation_host_before? ? pop! : continue_paragraph(:paragraph)
         end
         rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}))/) { pop! }
-        rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : continue_paragraph(:paragraph) }
         rule(%r/^(?=#{MARGIN}\^[ \t])/) { @lone_image ? pop! : continue_paragraph(:paragraph) }
         # An indented paragraph sits in a container, so a list marker below it
         # opens a sublist or the next item rather than continuing it.
@@ -591,11 +590,16 @@ module Rouge
       { listitem: Text, dlterm: Generic::Heading }.each do |name, tok|
         line = :"#{name}line"
         state name do
-          rule(/\n/) { token Text; goto line }
+          if name == :dlterm
+            rule(/\n/) { token Text; pop! }
+          else
+            rule(/\n/) { token Text; goto line }
+          end
           mixin :inlinecontent
           rule PLAIN, tok
           rule(/./) { token plain_token }
         end
+        next if name == :dlterm
 
         state line do
           rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
@@ -606,7 +610,6 @@ module Rouge
             end
           end
           rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/) { pop! }
-          rule(%r/^(?=#{MARGIN}(`{3,}|~{3,}))/) { |m| fence_closed_below?(m[1]) ? pop! : goto(name) }
           rule(//) { goto name }
         end
       end
@@ -891,12 +894,12 @@ module Rouge
 
         # A mention and a tag, each one token: the sigil is part of the name
         # rather than punctuation beside it.
-        rule %r/(?<![\w\/])@[\w][\w.-]*/, Name::Variable::Magic
-        rule %r/(?<![\w&])\#[\w][\w-]*/, Name::Variable::Instance
+        rule %r/(?<![\w\/])@(?=[\w.-]*?[A-Za-z])[\w][\w.-]*/, Name::Variable::Magic
+        rule %r/(?<![\w&])\#(?=[\w-]*?[A-Za-z])[\w][\w-]*/, Name::Variable::Instance
 
         # Typographic runs, longest first: an arrow is not an en dash plus a
         # stray angle bracket, and `---` is not `--` plus `-`.
-        rule %r/<-->|<==>|<=>|-->|<--|==>|<==|->|<-/, Operator
+        rule %r/<-->|<--(?!-)|(?<!-)-->|<=>|==>|<==/, Operator
         rule %r/(?<!-)---(?!-)|(?<!-)--(?!-)/, Punctuation
         rule %r/\.\.\./, Punctuation
       end
@@ -1018,15 +1021,6 @@ module Rouge
           state :"#{body}_#{scope}" do
             rule %r/\]/, Punctuation, :pop!
             rule(%r/(?=#{ends.source}|\n?\z)/) { pop! }
-            # The newline is handed back so the block reads the fence line.
-            rule(FENCE_NEXT) do |m|
-              if fence_closed_below?(m[1])
-                m.pos -= 1
-                pop!
-              else
-                token Text
-              end
-            end
             mixin :inlinecontent
             rule PLAIN_NO_BRACKET, tok
             rule %r/[^\]\n]/, tok
@@ -1261,20 +1255,10 @@ module Rouge
         entry[1].bsearch { |at| at >= pos } ? scope : nil
       end
 
-      # Where a body opened at +pos+ must end: the first block end, or the
-      # first closed fence, after it.
+      # Where a body opened at +pos+ must end: the first block end after it.
       def body_end(text, pos, scope)
         ends = BODY_ENDS[scope]
-        last = text.index(ends, pos) || text.length
-        return last if scope == :line
-
-        at = pos
-        while (fence = text.index(FENCE_NEXT, at)) && fence < last
-          return fence if fence_closed_below?($~[1], fence + 1)
-
-          at = fence + 1
-        end
-        last
+        text.index(ends, pos) || text.length
       end
 
       BRACKET_SCAN = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]/.freeze
@@ -1421,9 +1405,9 @@ module Rouge
 
           lines.map! { |line| line.empty? ? line : line[prefix.length..] }
         end
-        return false if lines.count { |line| line.match?(/\A[ \t]*\z/) } > 1
-
-        lines.none? { |line| line.match?(/\A(?:\#{1,6} +|:{3,}|[-*] +|> |\||`{3,}|~{3,}|(?:[-*_][ \t]*){3,}\z)/) }
+        # A term is one line (carve#4894): only a blank may stand between it
+        # and its `: ` line.
+        lines.size <= 1 && lines.all? { |line| line.match?(/\A[ \t]*\z/) }
       end
 
       # A `:` left of the `::` column of every open term above it ends the
@@ -1523,13 +1507,10 @@ module Rouge
         token Name::Attribute, rest + close
       end
 
-      # Whether a fence opened by +run+ on the current line is closed further
-      # down. Only a closed fence interrupts a paragraph.
-      def fence_closed_below?(run, line_start = @current_stream.charpos)
-        text = @current_stream.string
-        line_end = text.index("\n", line_start) || text.length
-        closer = %r/^[ \t]*#{Regexp.escape(run[0])}{#{run.length},}[ \t]*$/
-        closer_below?(closer, run, line_end)
+      def start_paragraph
+        @lone_image = !@current_stream.check(IMAGE_LINE).nil?
+        @indented = @current_stream.check(/[ \t]/) ? true : false
+        push :paragraph
       end
 
       # Lex the tail of a fence or container opener line without leaving the

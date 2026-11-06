@@ -175,6 +175,24 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(token_for('a #tag', '#tag')).to eq 'Name.Variable.Instance'
     end
 
+    # carve#4809: a name holds an ASCII letter.
+    it 'reads a sigil whose name has no letter as text' do
+      %w[#123 #1.2 @5].each { |text| expect(names("a #{text} b")).to eq ['Text'] }
+      expect(token_for('a #v2', '#v2')).to eq 'Name.Variable.Instance'
+      expect(token_for('a @a1', '@a1')).to eq 'Name.Variable.Magic'
+    end
+
+    # carve#4815, CARVE-P3-022: single-hyphen arrows and `=>` are text, and
+    # an arrow needs its exact hyphen run.
+    it 'scopes only the doubled arrows' do
+      %w[x->y a<-b <-> =>].each { |text| expect(names("p #{text} q")).not_to include 'Operator' }
+      expect(token_for('a --> b', '-->')).to eq 'Operator'
+      expect(token_for('a <-- b', '<--')).to eq 'Operator'
+      expect(token_for('a <--> b', '<-->')).to eq 'Operator'
+      expect(names('a---> b')).not_to include 'Operator'
+      expect(names('a <---b')).not_to include 'Operator'
+    end
+
     it 'reads the literal code span, whose ! is a prefix rather than text' do
       expect(lex('!`x`')).to eq [
         ['Operator', '!'],
@@ -588,11 +606,20 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(names("---\ntitle: x\n---\n")).to include 'Comment.Special'
     end
 
-    # A lone `---` at the top of a document is a thematic break. Opening
-    # frontmatter on it swallowed the rest of the file as comment.
-    it 'does not open on a `---` with no terminator' do
-      expect(names("---\n\n# Real heading\n")).not_to include 'Comment.Special'
-      expect(token_for("---\n\n# Real heading\n", 'Real heading')).to eq 'Generic.Heading'
+    # carve#5016: a first-line opener with no closer runs to the end.
+    it 'runs an opener with no terminator to the end of the document' do
+      expect(names("---\n\n# Real heading\n")).not_to include 'Generic.Heading'
+      expect(names("---\n\n# Real heading\n")).to include 'Comment.Special'
+    end
+
+    it 'reads a format token glued or after one space' do
+      expect(token_for("---yaml\nk: v\n---\n", 'yaml')).to eq 'Keyword.Type'
+      expect(token_for("--- toml\nk = 1\n", 'toml')).to eq 'Keyword.Type'
+      expect(names("---  yaml\nk\n")).not_to include 'Comment.Special'
+    end
+
+    it 'opens only on the first line' do
+      expect(token_for("x\n\n---\n\n# H\n", 'H')).to eq 'Generic.Heading'
     end
   end
 

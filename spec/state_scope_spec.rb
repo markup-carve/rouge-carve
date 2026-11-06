@@ -76,8 +76,9 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at(":kbd[x\n> q]\n", 'x')).to eq 'Text'
     end
 
-    it 'ends the search at a closed fence but not at an unclosed one' do
-      expect(kind_at("a ^[x\n~~~\ny]\n", 'y')).to eq 'Generic.Emph'
+    # carve#4018: a fence opener interrupts without looking for its closer.
+    it 'ends the search at a fence, closed or not' do
+      expect(kind_at("a ^[x\n~~~\ny]\n", 'x')).to eq 'Text'
       expect(kind_at("a ^[x\n~~~\ny]\n~~~\n", 'x')).to eq 'Text'
     end
 
@@ -175,10 +176,17 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at(source, 'after')).to eq 'Text'
     end
 
-    it 'reads an opener without a closer of its width as a one-line comment' do
+    # carve#4955: a comment opener has no closer lookahead.
+    it 'runs an opener without a closer of its width to the end' do
       source = "%%%\nx\n%%%%\ny\n"
-      expect(kind_at(source, 'x')).to eq 'Text'
-      expect(kind_at(source, 'y')).to eq 'Text'
+      expect(kind_at(source, 'x')).to start_with 'Comment'
+      expect(kind_at(source, 'y')).to start_with 'Comment'
+    end
+
+    it 'ends an unclosed indented span at a line left of its opener' do
+      source = "- a\n  %%%\n  x\nnext\n"
+      expect(kind_at(source, 'x')).to start_with 'Comment'
+      expect(kind_at(source, 'next')).to eq 'Text'
     end
   end
 
@@ -187,9 +195,20 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at("{.cls\n\npara}\n", 'para')).not_to eq 'Name.Attribute'
     end
 
-    it 'still spans lines inside one block' do
-      source = "{.a\n.b}\n# H\n"
-      expect(token_for(source, "{.a\n.b}")).to eq 'Name.Attribute'
+    # carve#5080: a continuation line is indented past the opening brace.
+    it 'still spans lines indented past its brace' do
+      source = "{.a\n .b}\n# H\n"
+      expect(token_for(source, "{.a\n .b}")).to eq 'Name.Attribute'
+    end
+
+    it 'does not continue on a line at its brace column' do
+      expect(kind_at("{.a\n.b}\n# H\n", '.b}')).not_to eq 'Name.Attribute'
+      expect(kind_at("  {.c\n  .d}\n", '.d}')).not_to eq 'Name.Attribute'
+    end
+
+    it 'does not interrupt a paragraph or an inline body when it cannot continue' do
+      expect(kind_at("a ^[x\n{.a\n.b}\ny]\n", 'y')).to eq 'Generic.Emph'
+      expect(kind_at("para\n{.a\n .b}\n# H\n", "{.a\n .b}")).to eq 'Name.Attribute'
     end
   end
 end

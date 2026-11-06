@@ -16,7 +16,7 @@ Inline: `code`, !`literal code`, $`e^{i\pi}+1=0`, [a link](https://example.com),
 [@knuth1984], :kbd[Ctrl], :smile:, @mention, #tag, and a footnote[^note].
 
 An inline footnote ^[carried right here] and editorial marks: {+inserted+},
-{-deleted-}, {~old~>new~}, {#a reviewer note#}. Typography: -> <- --> <=> ...
+{-deleted-}, {~old~>new~}, {#a reviewer note#}. Typography: --> <-- <--> <=> ...
 and an em dash --- mid-sentence. Escapes hold: \*not strong\*.
 
 ## Blocks
@@ -44,13 +44,13 @@ A layout container.
 :::
 
 {.striped}
-|= Left |=> Right |=~ Center |
-| a     | b       | c        |
-| d     | e       | f        |{.ok}
+|= Left |={>} Right |={~} Center |
+| a     | b         | c          |
+| d     | e         | f          |{.ok}
 
 ^ Table 1: a caption that numbers itself.
 
-``` ruby "example.rb" [tab]
+```ruby "example.rb" [tab]
 def greet(name)
   "Hello, #{name}!"     # <1>
 end

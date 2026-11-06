@@ -47,7 +47,7 @@ CONSTRUCTS = {
   'task item' => "- [x] done\n",
   'table header row' => "|= A |= B |\n", 'row attributes' => "| a | b |{.ok}\n",
   'container' => %(::: note "T"\n), 'caption' => "^ Figure 1\n",
-  'thematic break' => "---\n\ntext\n", 'definition term' => ":: term\n",
+  'thematic break' => "text\n\n---\n", 'definition term' => ":: term\n",
   'code fence' => "```php\n$x = 1;\n```\n", 'raw fence' => "```=html\n<b>x</b>\n```\n",
   'frontmatter' => "---\ntitle: x\n---\n\n# H\n",
   'trailing comment' => 'x %% note', 'comment fence' => "%%%\nhidden\n%%%\n",

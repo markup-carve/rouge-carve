@@ -29,8 +29,14 @@ RSpec.describe Rouge::Lexers::Carve do
       expect(kind_at("para\n^ not a caption\n", 'not')).to eq 'Text'
     end
 
-    it 'reads an unclosed fence as text' do
-      expect(kind_at("intro\n```js\ncode\n", 'code')).to eq 'Text'
+    # carve#4018, PART 9 section 10 I4: no closer lookahead.
+    it 'lets an unclosed fence interrupt it' do
+      expect(kind_at("intro\n```js\ncode\n", 'js')).to eq 'Name.Builtin'
+      expect(kind_at("intro\n```js\ncode\n", 'code')).not_to eq 'Text'
+    end
+
+    it 'reads a backtick run with a backtick in its info as a code span' do
+      expect(kind_at("intro\n```a``` b\n", 'b')).to eq 'Text'
     end
 
     {
@@ -71,8 +77,15 @@ RSpec.describe Rouge::Lexers::Carve do
   end
 
   describe 'definition lists' do
-    it 'reads a definition after a term that wraps' do
-      expect(kind_at(":: A term that\nwraps\n: its definition\n", ': its')).to eq 'Punctuation'
+    # carve#4894: a term is one line.
+    it 'reads a colon line after a wrapped term as paragraph text' do
+      source = ":: A term that\nwraps\n: its definition\n"
+      expect(kind_at(source, 'wraps')).to eq 'Text'
+      expect(kind_at(source, ': its')).to eq 'Text'
+    end
+
+    it 'reads a definition after a blank below its term' do
+      expect(kind_at(":: term\n\n: its definition\n", ': its')).to eq 'Punctuation'
     end
 
     it 'reads a colon under a paragraph as text' do
@@ -128,8 +141,17 @@ RSpec.describe Rouge::Lexers::Carve do
     end
 
     it 'still reads single-letter and roman markers' do
-      expect(kind_at("B. x\n", 'B.')).to eq 'Literal.Number.Integer'
+      expect(kind_at("B.  x\n", 'B.')).to eq 'Literal.Number.Integer'
       expect(kind_at("xiv) y\n", 'xiv)')).to eq 'Literal.Number.Integer'
+    end
+
+    # carve#4811: initials are not markers.
+    it 'reads a letter or roman marker with a dot and one space as text' do
+      expect(kind_at("B. x\n", 'B.')).to eq 'Text'
+      expect(kind_at("J. R. R. Tolkien\n", 'J.')).to eq 'Text'
+      expect(kind_at("iv. x\n", 'iv.')).to eq 'Text'
+      expect(kind_at("b) x\n", 'b)')).to eq 'Literal.Number.Integer'
+      expect(kind_at("10. x\n", '10.')).to eq 'Literal.Number.Integer'
     end
   end
 end
