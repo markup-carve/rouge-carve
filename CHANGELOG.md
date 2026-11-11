@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-11
+
+- Braced cell alignment (`|={>} Price |`, `|={<^ .x} Name |`, `|{~} 1 |`) lexes as an attribute with its alignment run as an operator, like the deprecated `|=>` prefix; cell pipes and escaped pipes stay outside it (#37).
+- `->`, `<-`, `<->` and `=>` are text, and `-->` and `<--` need their exact hyphen run (#38).
+- A mention or tag name needs an ASCII letter (#38).
+- A first-line `---` opens frontmatter through the end of the document when no closer follows; a mid-document `---` never does (#38).
+- A letter or roman marker with a dot needs two spaces, and a definition term is one line (#38).
+- A code fence opener and a `%%%` comment span open without a closer lookahead, and a multiline attribute block continues only on lines indented past its `{` (#38).
+
 ## [0.1.4] - 2026-10-23
 
 - `csv` and `tsv` fence bodies are highlighted: every field has its own token type and the separator is an operator, colored apart from the fields in the default styles (#25, #26, #27, #28).
