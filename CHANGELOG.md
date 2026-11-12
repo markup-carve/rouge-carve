@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.1.5] - 2026-11-11
+## [0.1.5] - 2026-11-12
 
 - Braced cell alignment (`|={>} Price |`, `|={<^ .x} Name |`, `|{~} 1 |`) lexes as an attribute with its alignment run as an operator, like the deprecated `|=>` prefix; cell pipes and escaped pipes stay outside it (#37).
 - `->`, `<-`, `<->` and `=>` are text, and `-->` and `<--` need their exact hyphen run (#38).
