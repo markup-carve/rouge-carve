@@ -1002,6 +1002,14 @@ module Rouge
 
         limit = enclosing_closer(pos)
 
+        if char == '*' && after == '/' && !before.to_s.match?(/[\w*\/]/) &&
+           text[pos + 1].to_s.match?(/\S/) && !(text[pos + 1] == '*' && text[pos + 2].to_s.match?(/[\s*]/)) &&
+           closer_ahead?(:italicbold, COMBINED_CLOSERS[:italicbold], pos + 2, masked: :combined, before: limit)
+          token Punctuation
+          push :italicbold
+          return push(:punctchar)
+        end
+
         if after && !after.match?(refused_after) && !(before && before.match?(refused_before)) &&
            closer_ahead?(name, BARE_CLOSERS[name], pos, masked: :bare, before: limit)
           token Punctuation

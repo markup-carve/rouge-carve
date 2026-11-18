@@ -18,7 +18,7 @@ RSpec.describe Rouge::Lexers::Carve2 do
     ['U-050', "%%%\nhidden\n%%% visible?\nafter\n", 'Comment', nil],
     ['U-055', "| a | b |\n|---|--:|\n| 1 | 2 |\n", 'Punctuation', 'Operator'],
     ['U-056', "|=< a |=> b |=~ c |\n", 'Operator', 'Name.Attribute'],
-    ['U-063', "| a | b |\n\n^ Caption\n", 'Punctuation', 'Generic.Subheading'],
+    ['U-063', "| a | b |\n\n^ Caption\n", 'Punctuation', nil],
     ['U-065', "an _underlined_ word\n", nil, 'Generic.Emph'],
     ['U-066', "a ~struck~ word\n", nil, 'Generic.Deleted'],
     ['U-067', "a =marked= word\n", nil, 'Generic.Inserted'],
@@ -59,6 +59,10 @@ RSpec.describe Rouge::Lexers::Carve2 do
     ["- +\n```\nx\n```\n", "> +\n- item\n"].each do |source|
       expect(lex(source).any? { |name, value| name == 'Operator' && value == '+' }).to be false
     end
+  end
+
+  it 'colors the retained combined emphasis order' do
+    expect(lex('*/bold italic/*').map(&:first)).to include 'Generic.Strong'
   end
 
   it 'treats a second caret as caption content' do
