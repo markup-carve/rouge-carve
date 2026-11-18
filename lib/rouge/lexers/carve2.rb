@@ -1,0 +1,1500 @@
+# -*- coding: utf-8 -*- #
+# frozen_string_literal: true
+
+require_relative 'carve_continuation'
+
+module Rouge
+  module Lexers
+    # Carve 0.2 has its own rule graph so the 0.1 lexer and its registration
+    # keep working. Rouge emits a flat stream of tokens, so nested inline
+    # constructs can share a content scope while retaining their punctuation.
+    # The 0.2 block and inline changes below follow the grammar inventory.
+    class Carve2 < RegexLexer
+      class DelimitedTable < RegexLexer
+        # Unquoted fields are Name::Variable (colored in the default Rouge
+        # styles, unlike a bare Name); the header record's unquoted fields are
+        # Name::Attribute.
+        start { @header = true }
+
+        def field_token
+          @header ? Name::Attribute : Name::Variable
+        end
+
+        state :root do
+          rule /"/ do
+            token Str
+            push :unquoted
+            push :quoted
+          end
+          rule /[,\t]/ do |m|
+            if m[0] == self.class::SEPARATOR
+              token Keyword
+            else
+              token field_token
+              push :unquoted
+            end
+          end
+          rule /[^,\t\n]+/ do
+            token field_token
+            push :unquoted
+          end
+          rule /\n/ do
+            token Text
+            @header = false
+          end
+        end
+
+        state :unquoted do
+          rule /[,\t]/ do |m|
+            if m[0] == self.class::SEPARATOR
+              token Keyword
+              pop!
+            else
+              token field_token
+            end
+          end
+          rule /[^,\t\n]+/ do
+            token field_token
+          end
+          rule /\n/ do
+            token Text
+            @header = false
+            pop!
+          end
+        end
+
+        state :quoted do
+          rule /""/, Str::Escape
+          rule /"/, Str, :pop!
+          rule /[^"]+/, Str
+        end
+      end
+
+      class CsvTable < DelimitedTable
+        SEPARATOR = ','.freeze
+      end
+
+      class TsvTable < DelimitedTable
+        SEPARATOR = "\t".freeze
+      end
+
+      title 'Carve 0.2'
+      desc 'Carve, a lightweight markup language for documents and the web'
+
+      tag 'carve2'
+      aliases 'crv2'
+      filenames '*.crv2'
+      mimetypes 'text/x-carve;version=0.2'
+
+      # A leading margin. A byte order mark at the start of a document is not
+      # content, so a block opener behind one is still a block opener.
+      MARGIN = /[ \t﻿]*/.freeze
+
+      # One attribute block, brace to brace. Quoted values may contain a brace
+      # and an escaped quote, so the value alternatives come before the
+      # bare-character one; a single nested brace pair is allowed for a braced
+      # span written inside. The tail is the block after its `{`.
+      ATTRS_TAIL = %r/
+        (?=[.:}'"]|\#[\w-]+[\s}]|[A-Za-z][\w-]*(?:[=\s}]|$))(?:
+          "(?:[^"\\\n]|\\.)*"
+          |'(?:[^'\\\n]|\\.)*'
+          |\{[^{}\n]*\}
+          |[^{}\n]
+        )*\}
+      /x.freeze
+      ATTRS = /\{#{ATTRS_TAIL}/.freeze
+
+      # The same block as a STANDALONE ATTRIBUTE LINE, which may span lines
+      # but not a blank one: a blank line ends the block it would attach to.
+      # The inline form cannot span lines at all, because an unclosed inline
+      # `{` would otherwise swallow the rest of the document.
+      LINE_BREAK = '\n(?![ \t]*(?:\n|\z))'
+      ATTRS_LINE = %r/
+        \{(?=[.:}'"]|\#[\w-]+[\s}]|[A-Za-z][\w-]*(?:[=\s}]|$))(?:
+          "(?:[^"\\\n]|\\.|#{LINE_BREAK})*"
+          |'(?:[^'\\\n]|\\.|#{LINE_BREAK})*'
+          |\{(?:[^{}\n]|#{LINE_BREAK})*\}
+          |[^{}\n]
+          |#{LINE_BREAK}
+        )*\}
+      /x.freeze
+      # The same block as an interrupting line, whose continuations must be
+      # indented (carve#5080). Exact at column 0; an indented block is checked
+      # against its own `{` column in the :block rule.
+      ATTRS_INTERRUPT = Regexp.new(ATTRS_LINE.source.gsub(LINE_BREAK, '\n(?=[ \t]+[^ \t\n])'), Regexp::EXTENDED)
+
+      # The prefix of a line inside a blockquote, nested markers included.
+      # Each `>` needs a space or the line end after it: `>foo` and `>> x`
+      # are paragraph text.
+      QUOTE_PREFIX = /(?:[ \t]*>(?=[ \t]|$))+[ \t]?/.freeze
+
+      # A bracketed label that may itself contain three levels of brackets. A
+      # regex cannot match arbitrarily balanced brackets, and a link label in
+      # practice nests a level or two (`[t[z]](/u)`). Bounding the nesting keeps
+      # the common shapes matching instead of stopping at the first inner
+      # bracket, which is what a naive \[[^\]]*\] does.
+      LABEL = begin
+        inner = '[^\[\]\\\\\n]|\\\\.'
+        pattern = "(?:#{inner})*"
+        3.times { pattern = "(?:#{inner}|\\[#{pattern}\\])*" }
+        Regexp.new("\\[#{pattern}\\]").freeze
+      end
+
+      # An ordered marker: a number, one letter, or a roman numeral. `Body.`
+      # is a word, not a marker, and a letter with `.` needs two spaces, so
+      # `J. R. R. Tolkien` is prose (carve#4811).
+      ORDERED = "(?:\\d{1,9}[.)]|(?:[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)(?:\\)|\\.(?=(?:#{ATTRS})? )))"
+
+      # The states read a column-0 `+` with a flush-left block below as an
+      # attachment. Whether a `+` is the marker is settled by CarveContinuation.
+      PLUS_NEXT = /(?=\n[^ \t\n])/.freeze
+
+      # A list marker at the start of a line, as the list rules below read it.
+      LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
+      OPENER_RUN = "(?:(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})? +[ \\t]*|> )+"
+
+      # A cell's alignment symbols: horizontal, then an optional vertical one.
+      CELL_ALIGN = '(?:[<>~][\\^~v]?|\\?[\\^~v])'
+      # A cell's attribute block when it opens with alignment (carve#5091 D3),
+      # glued to its `|` or `|=` and followed by the cell's space.
+      CELL_BRACE = %(({)(#{CELL_ALIGN})((?:[ ]+(?:"(?:[^"\\\\\n]|\\\\.)*"|'(?:[^'\\\\\n]|\\\\.)*'|[^{}"'|\n])*)?)(})(?= ))
+
+      # A table row needs its closing pipe: `| not a table` is a paragraph.
+      ROW_END = /(?=(?:\\.|[^\\\n])*\|[ \t]*(?:#{ATTRS})?[ \t]*$)/.freeze
+
+      # The block openers that interrupt a paragraph. A list marker and a
+      # caption do not. A fence opener does without looking for its closer
+      # (carve#4018); a backtick in a backtick info string makes it a code span.
+      INTERRUPT = %r/
+        `{3,}[^`\n]*$ | :{3,} | %{3,}
+        | \*{3,}[ \t]*$
+        | \|#{ROW_END}
+        | %%[ \t]*\#(?:region[ \t]+[A-Za-z_][\w-]*|endregion(?:[ \t]+[A-Za-z_][\w-]*)?)[ \t]*$
+      /x.freeze
+
+      # Where a bracketed inline body must close, by the block it sits in: a
+      # paragraph ends at a blank line or an interrupting block, a list item
+      # also at the next marker, and a heading or table row at its line end.
+      BODY_ENDS = {
+        para: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}))/,
+        item: /\n(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/,
+        line: /\n/
+      }.freeze
+      # The block states that decide which of those ends applies.
+      BODY_SCOPE = {
+        paragraph: :para, listitem: :item, dlterm: :line, heading: :line,
+        caption: :line, quoteline: :line, tablerow: :line, defline: :line
+      }.freeze
+
+      # A paragraph that is a lone image or display math: a caption under it
+      # is that block's.
+      IMAGE_LINE = %r/
+        #{MARGIN}(?:!#{LABEL}(?:\([^)\n]*\)|#{LABEL})?|\$\$(`+)[^\n]*?\1)(?:#{ATTRS})?[ \t]*$
+      /x.freeze
+
+      # The braced inline families: delimiter, content token, state.
+      BRACED = {
+        '*' => [Generic::Strong, :forcedstrong], '/' => [Generic::Emph, :forcedemph],
+        '_' => [Generic::Emph, :forcedunderline], '~' => [Generic::Deleted, :forcedstrike],
+        '^' => [Generic::Emph, :superscript],
+        ',' => [Generic::Emph, :subscript], '=' => [Generic::Inserted, :bracedmark],
+        '+' => [Generic::Inserted, :insertion], '-' => [Generic::Deleted, :deletion]
+      }.freeze
+
+      # The bare emphasis delimiters: state, content token, and the characters
+      # that may not stand before an opener or after it. A closer needs a
+      # non-space before it and no letter or digit after it.
+      BARE = {
+        '*' => [:strong, Generic::Strong, /[\w*]/, /[\s*]/],
+        '/' => [:emph, Generic::Emph, /[\w\/]/, /[\s\/]/]
+      }.freeze
+
+      # Characters that can begin an inline construct. A run of anything else is
+      # ordinary content and is emitted as ONE token - without this every
+      # content character becomes its own token, which is both noisy and
+      # unusable to a consumer asking whether a phrase carries a scope.
+      INLINE_STARTERS = '\\\\%!`${\\[\\^<:@\\#*\\/_~=.\\-'
+
+      # A run of content characters, excluding +extra+ as well.
+      def self.plain_run(extra = '')
+        Regexp.new("[^\n#{INLINE_STARTERS}#{extra}]+")
+      end
+
+      PLAIN = plain_run.freeze
+      PLAIN_NO_PIPE = plain_run('|').freeze
+      PLAIN_NO_BRACKET = plain_run('\\]').freeze
+
+      # The document start. Front matter opens only here: Rouge 3 and 4 scan
+      # without a fixed anchor, so \A alone would also match mid-document.
+      state :root do
+        rule %r/\A(﻿?)(---)(?:( ?)([A-Za-z0-9]+))?([ \t]*(?:\n|\z))/ do
+          groups Text, Punctuation, Text, Keyword::Type, Text
+          goto :block
+          push :frontmatter
+        end
+        rule(//) { goto :block }
+      end
+
+      # ------------------------------------------------------------------
+      # Block level
+      # ------------------------------------------------------------------
+
+      # The openers a blockquote marker can introduce as well as a line start.
+      # They are written once and instantiated twice: anchored at a line start
+      # for the document, and unanchored for the rest of a line after `>`,
+      # where the scanner already sits where the block would begin. Each one
+      # enters its state through #open_block, which knows which of the two it
+      # is running in.
+      def self.block_openers(bol)
+        root_margin = bol == '^' ? '()' : '( )'
+        proc do
+          # A raw block: the `=FORMAT` info string routes the payload to that
+          # output format verbatim. Emitted as one token including the `=`,
+          # because the format word without its sigil is not the construct.
+          # The payload is never a language, so it is never delegated.
+          rule %r/#{bol}(#{MARGIN})(`{3,})([ \t]*)(=[a-zA-Z][\w+.-]*)([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Keyword::Type
+            lex_info_string(m[5])
+            push_fence(m[2], nil)
+          end
+
+          # A code fence. The first word of the info string names a language,
+          # and a lexer for it highlights the payload - the one place this
+          # lexer looks past Carve, because a reader of a `.crv` file expects
+          # an embedded PHP sample to look like PHP.
+          rule %r/#{bol}(#{MARGIN})(`{3,})([ \t]*)([a-zA-Z][\w+#.-]*)?([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Name::Builtin
+            lex_info_string(m[5])
+            push_fence(m[2], m[4])
+          end
+
+          # Container divs. A reserved kind word (note, tip, figure, ...)
+          # names a known container; `:::` followed by `|` is the layout form.
+          rule %r/#{bol}(#{MARGIN})(:{3,})([ \t]*)([|>\\])([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Operator
+            lex_info_string(m[5])
+            open_block
+          end
+          rule %r/#{bol}(#{MARGIN})(:{3,})([ \t]*)([a-zA-Z][\w-]*)?([^\n]*)/ do |m|
+            groups Text, Punctuation, Text, Keyword::Namespace
+            lex_info_string(m[5])
+            open_block
+          end
+
+          # A caption line attaches to the block above or below it.
+          rule %r/(?<!\n\n)#{bol}(#{MARGIN})(\^)( +)(?=[ \t]*[^ \t\n])/ do
+            groups Text, Punctuation, Text
+            open_block :caption
+          end
+
+          # Headings. Carve has no setext form, so a `#` run is the only
+          # spelling and a trailing `{...}` is NOT an attribute block here.
+          rule %r/#{bol}(#{MARGIN})((?:\#{1,6}|={1,6}))( )(?=[^ \t\n])/ do
+            groups Text, Punctuation, Text
+            open_block :heading
+          end
+
+          # Thematic breaks, before the list rules so `---` is not a bullet.
+          rule %r/#{bol}#{MARGIN}\*{3,}[ \t]*$/ do
+            token Punctuation
+            open_block
+          end
+
+          # Definition markers: footnote, link reference, abbreviation. The
+          # separator after the colon must START WITH A LITERAL SPACE - a
+          # tab-first separator makes the line an ordinary paragraph. Each
+          # definition ends with its line.
+          rule %r/#{bol}(#{MARGIN})(\[\^)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Label, Punctuation, Text
+            open_block(:defline, :defline, host: :footnote)
+          end
+          rule %r/#{bol}(#{MARGIN})(\*\[)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Entity, Punctuation, Text
+            open_block :defline
+          end
+          rule %r/#{bol}(#{MARGIN})(\[)([^\]\n]+)(\]:)( )/ do
+            groups Text, Punctuation, Name::Label, Punctuation, Text
+            open_block :linkdest
+          end
+
+          # A definition-list term (`::`) and its definition (`:`). A term
+          # may wrap onto lazy lines, and a definition's text is an item's.
+          rule %r/#{bol}(#{MARGIN})(::)( +)(?=[ \t]*[^ \t\n])/ do
+            groups Text, Punctuation, Text
+            remember_host(:term)
+            open_block :dlterm, :heading
+          end
+          # Without a term above, `: b` is paragraph text (a lazy line too).
+          rule %r/#{bol}(#{MARGIN})(:)(?= +[ \t]*[^ \t\n])/ do
+            # the scan from the last definition is short; the term scan runs once
+            if (definition_before? || definition_term_before?) && !separator_below_term?
+              groups Text, Punctuation
+              term = [@term_stream, @term_pos, @term_quote_depth]
+              open_block :listitem, :quoteline
+              # the next `: d` may still belong to the same term
+              @term_stream, @term_pos, @term_quote_depth = term
+              @def_stream = @current_stream
+              @def_pos = @last_host_pos
+              @def_quote_depth = @term_quote_depth
+            else
+              groups Text, Text
+              open_block :paragraph
+            end
+          end
+
+          # A blockquote marker must be followed by a space or end the line;
+          # `>foo` and `>> x` are paragraphs, and `> > x` nests. What follows
+          # a marker may open a block of its own, so the openers are tried
+          # again there.
+          rule %r/#{bol}(#{MARGIN})(>)(?= |$)/ do |m|
+            groups Text, Punctuation
+            record_quote_depth(quote_depth_on_line + 1)
+            remember_host(:quote)
+            rooted = state?(:quotestart) ? m[1] == ' ' : m[1].empty?
+            if rooted
+              state?(:quotestart) ? goto(:quotestart) : push(:quotestart)
+            else
+              state?(:quotestart) ? goto(:quoteline) : push(:quoteline)
+            end
+          end
+
+          # A quote opened on a list item's marker line (`- > q`): its `>` is a
+          # marker, and a `+` behind it may be the quote's first block
+          # (markup-carve/carve#3421).
+          rule %r/#{bol}(#{MARGIN})((?:(?:[-*](?:#{ATTRS})?(?: +\[[^\]\n]\])?|#{ORDERED}(?:#{ATTRS})?|\.(?:#{ATTRS})?) +)+)((?:> +)*>)(?:( )(\+)()$|(?= |$))/ do |m|
+            token Text, m[1]
+            scanner = StringScanner.new(m[2] + m[3])
+            until scanner.eos?
+              if (marker = scanner.scan(/(?:#{ORDERED}|\.)(?:#{ATTRS})?/))
+                token Num::Integer, marker
+              elsif (marker = scanner.scan(/\[[^\]\n]\]/))
+                token Name::Constant, marker
+              elsif (marker = scanner.scan(/[-*](?:#{ATTRS})?|>/))
+                token Punctuation, marker
+              else
+                token Text, scanner.scan(/ +/)
+              end
+            end
+            if m[5]
+              token Text, m[4]
+              # CarveContinuation settles whether this `+` is the marker.
+              token Text, m[5]
+            end
+            open_block(:quoteline)
+          end
+
+          # Task items before plain bullets, so the state marker is its own
+          # token. The state is any single character, not only a space or an
+          # x: `[>]` is deferred and `[-]` is dropped. A `+` is not a bullet in
+          # Carve; it continues a container.
+          rule %r/#{bol}(#{MARGIN})((?:[-*]|#{ORDERED})(?:#{ATTRS})?)( +)(\[[^\]\n]\])(?= +[ \t]*[^ \t\n])/ do
+            groups Text, Punctuation, Text, Name::Constant
+            open_block :listitem, :quoteline
+          end
+
+          # Bullets. A run of markers on one line opens nested lists at once
+          # (`- - A`), and attributes may be glued straight onto the marker.
+          rule %r/#{bol}(#{MARGIN})((?:[-*] +)*[-*](?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
+            groups Text, Punctuation
+            open_block :listitem, :quoteline
+          end
+
+          # Ordered markers: numeric, alphabetic, roman, and the bare `.` that
+          # continues the enclosing sequence.
+          rule %r/#{bol}(#{MARGIN})(#{ORDERED}(?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
+            groups Text, Num::Integer
+            open_block :listitem, :quoteline
+          end
+          rule %r/#{bol}(#{MARGIN})(\.(?:#{ATTRS})?)(?= +[ \t]*[^ \t\n])/ do
+            groups Text, Num::Integer
+            open_block :listitem, :quoteline
+          end
+
+          # Tables. The header marker, the alignment run and the separator row
+          # are their own tokens; cell content is lexed inline. A row needs its
+          # closing pipe.
+          rule %r/#{bol}(#{MARGIN})(\|=?)#{CELL_BRACE}#{ROW_END}/ do |m|
+            token Text, m[1]
+            braced_cell(m)
+            open_block :tablerow
+          end
+          rule %r/#{bol}(#{MARGIN})(\|=)#{ROW_END}/ do
+            groups Text, Operator
+            open_block :tablerow
+          end
+          rule %r/#{bol}(#{MARGIN})(\|)#{ROW_END}/ do
+            groups Text, Punctuation
+            open_block :tablerow
+          end
+        end
+      end
+
+      state(:blockopeners, &block_openers('^'))
+      state(:quoteopeners, &block_openers(''))
+
+      state :block do
+        rule %r/^(#{MARGIN})(%%[ \t]*\#(?:region[ \t]+[A-Za-z_][\w-]*|endregion(?:[ \t]+[A-Za-z_][\w-]*)?))([ \t]*)$/ do
+          groups Text, Comment::Special, Text
+        end
+        # A comment fence (%%% or longer) versus a one-line comment. The fence
+        # has to be tried first: %%% also matches the one-line form. Only a
+        # run of the SAME length closes it, so the width is closed over the
+        # way #push_fence does it. No closer is looked for: an unclosed span
+        # ends at a line left of its opener, which misses the opener's owner,
+        # or at the end of the document. Text after either run is comment.
+        rule %r/^(#{MARGIN})(%%%+)([^\n]*)(\n)/ do |m|
+          closer = %r/^([ \t]*)(%{#{m[2].length},})([ \t]*)$/
+          outside = m[1].empty? ? nil : %r/^(?=[ \t]{0,#{m[1].length - 1}}[^ \t\n])/
+
+          groups Text, Comment::Preproc, Comment, Text
+          push do
+            rule(outside) { pop! } if outside
+            rule closer do
+              groups Text, Comment::Preproc, Comment
+              pop!
+            end
+            rule %r/\n/, Comment
+            rule %r/[^\n]+\n?/, Comment
+          end
+        end
+        rule %r/^(#{MARGIN})(%%)([^\n]*)$/ do
+          groups Text, Comment::Preproc, Comment
+        end
+
+        mixin :blockopeners
+
+        # A standalone attribute block, which may span lines indented past its
+        # `{` (carve#5080). One that does not is a paragraph.
+        rule %r/^(#{MARGIN})(#{ATTRS})(?=[ \t]*\n(?![ \t]*\n)[ \t]*\S)/ do
+          groups Text, Name::Attribute
+        end
+        rule %r/^#{MARGIN}#{ATTRS}(?=[ \t]*(?:\n[ \t]*\n|\z))/ do |m|
+          token Text, m[0]
+        end
+
+        # Any other line with content starts a paragraph.
+        rule(%r/^(?=#{MARGIN}\S)/) { start_paragraph }
+
+        mixin :inline
+      end
+
+      # A paragraph, and the start of each line after its first: a line that
+      # opens a block interrupting it ends it, anything else continues it, so
+      # a list marker or a caption under prose is prose.
+      state :paragraph do
+        rule(/\n/) { token Text; goto :paraline }
+        mixin :inlinecontent
+        rule PLAIN, Text
+        rule %r/./, Text
+      end
+
+      state :paraline do
+        rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+        rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}))/) { pop! }
+        rule(%r/^(?=#{MARGIN}\^[ \t])/) { @lone_image ? pop! : continue_paragraph(:paragraph) }
+        # An indented paragraph sits in a container, so a list marker below it
+        # opens a sublist or the next item rather than continuing it.
+        rule(%r/^(?=#{MARGIN}#{LIST_MARKER})/) { @indented ? pop! : continue_paragraph(:paragraph) }
+        rule(//) { continue_paragraph(:paragraph) }
+      end
+
+      # The text of a list item, a definition or a definition term. The line
+      # after it may also start the next item or definition.
+      { listitem: Text, dlterm: Generic::Heading }.each do |name, tok|
+        line = :"#{name}line"
+        state name do
+          if name == :dlterm
+            rule(/\n/) { token Text; goto :dltermline }
+          else
+            rule(/\n/) { token Text; goto line }
+          end
+          mixin :inlinecontent
+          rule PLAIN, tok
+          rule(/./) { token plain_token }
+        end
+        next if name == :dlterm
+
+        state line do
+          rule(%r/^(?=[ \t]*(?:\n|\z))/) { pop! }
+          rule(%r/^(?=#{MARGIN}(?:#{INTERRUPT}|#{LIST_MARKER}|:[ \t]))/) { pop! }
+          rule(//) { goto name }
+        end
+      end
+
+      state :dltermline do
+        rule(%r/^(?=[ \t]*(?:\n|\z)|#{MARGIN}(?:::? [^\n]|#{INTERRUPT}))/) { pop! }
+        rule(//) { goto :dlterm }
+      end
+
+      # Right after a blockquote marker: a block opener, or quoted text.
+      state :quotestart do
+        mixin :quoteopeners
+        rule(//) { goto :quoteline }
+      end
+
+      state :frontmatter do
+        rule %r/^(---)([ \t]*)$/ do
+          groups Punctuation, Text
+          pop!
+        end
+        rule %r/\n/, Comment::Special
+        rule %r/[^\n]+\n?/, Comment::Special
+      end
+
+      state :defline do
+        rule %r/$/, Text, :pop!
+        mixin :inlinecontent
+        rule PLAIN, Text
+        rule %r/[^\n]/, Text
+      end
+
+      state :heading do
+        rule %r/$/, Text, :pop!
+        mixin :lineverbatim
+        mixin :inlinecontent
+        rule PLAIN, Generic::Heading
+        rule %r/[^\n]/, Generic::Heading
+      end
+
+      state :quoteline do
+        rule %r/$/, Text, :pop!
+        mixin :lineverbatim
+        mixin :inlinecontent
+        rule PLAIN, Generic::Emph
+        rule %r/[^\n]/, Generic::Emph
+      end
+
+      state :caption do
+        rule %r/$(?!\n[ \t]*\^[ \t])/, Text, :pop!
+        rule %r/\n[ \t]*\^[ \t]/, Generic::Subheading
+        mixin :lineverbatim
+        mixin :inlinecontent
+        rule PLAIN, Generic::Subheading
+        rule %r/[^\n]/, Generic::Subheading
+      end
+
+      state :tablerow do
+        rule %r/$/, Text, :pop!
+        # A header cell marker, optionally carrying an alignment run. The pipe
+        # is part of it, so `|=` reads as one construct.
+        # An escaped pipe is consumed by the escape rule first, so a `|` here
+        # always ends a cell.
+        rule(%r/(\|=?)#{CELL_BRACE}/) { |m| braced_cell(m) }
+        rule %r/\|=/, Operator
+        rule %r/\|/, Punctuation
+        mixin :inlinecontent
+        rule PLAIN_NO_PIPE, Text
+        rule %r/[^\n|]/, Text
+      end
+
+      state :linkdest do
+        rule %r/$/, Text, :pop!
+        rule %r/<[^>\n]*>/, Name::Tag
+        rule %r/"[^"\n]*"/, Str::Double
+        rule %r/[^\s\n]+/, Name::Tag
+        # Any Unicode whitespace, not only space and tab: a destination can be
+        # preceded by U+202F and friends, and a class of two characters leaves
+        # the state with nothing to match.
+        rule %r/[^\S\n]+/, Text
+      end
+
+      # ------------------------------------------------------------------
+      # Inline level
+      # ------------------------------------------------------------------
+      state :inline do
+        mixin :inlinecontent
+        rule %r/\n/, Text
+        rule %r/./, Text
+      end
+
+      state :lineverbatim do
+        rule %r/(!)(`+)(?!`)((?:(?!(?<!`)\2(?!`))[^\n])*)((?<!`)\2(?!`)|$)/ do
+          groups Operator, Punctuation, Literal, Punctuation
+        end
+        rule %r/(\$\$?)(`+)(?!`)((?:(?!(?<!`)\2(?!`))[^\n])*)((?<!`)\2(?!`)|$)/ do
+          groups Operator, Punctuation, Str::Other, Punctuation
+        end
+        rule %r/(`+)(?!`)((?:(?!(?<!`)\1(?!`))[^\n])*)((?<!`)\1(?!`)|$)/ do
+          groups Punctuation, Str::Backtick, Punctuation
+        end
+      end
+
+      state :inlinecontent do
+        # An escape wins over every delimiter that follows it. A backslash at
+        # END OF LINE escapes nothing - it is a hard break, and needs its own
+        # rule because the general form requires a following character.
+        rule %r/\\(?=\n|$)/, Str::Escape
+        rule %r/\\[!-\/:-@\[-`{-~]/, Str::Escape
+
+        # A trailing comment runs to end of line from anywhere on it.
+        rule %r/(%%)([^\n]*)$/ do
+          groups Comment::Preproc, Comment
+        end
+
+        # Verbatim families first: nothing inside them is markup. The literal
+        # form is a `!` PREFIX on a code span, not a trailing attribute, and it
+        # has to be tried before plain inline code or the `!` would be read as
+        # text and the span as ordinary code.
+        rule %r/(!)(`+)([^\n]*?)(\2)/ do
+          groups Operator, Punctuation, Literal, Punctuation
+        end
+        rule %r/(\$\$)(`+)([^\n]*?)(\2)/ do
+          groups Operator, Punctuation, Str::Other, Punctuation
+        end
+        rule %r/(\$)(`+)([^\n]*?)(\2)/ do
+          groups Operator, Punctuation, Str::Other, Punctuation
+        end
+        rule %r/(`+)([^\n]*?)(\1)/ do
+          groups Punctuation, Str::Backtick, Punctuation
+        end
+
+        # The reserved include directive `{{ path #section @key:value }}`
+        # (PART 9 section 19, grammar.ebnf `include_directive`). The core
+        # leaves it literal; a processor expands it only when a host supplies a
+        # resolver.
+        #
+        # One directive rule, because its own selector is spelled with constructs this
+        # lexer already knows: `#section` is the tag rule below and an option
+        # slot is the mention rule, so without this `#intro` came out coloured
+        # as a hashtag inside a path. After the verbatim family, so a directive
+        # in a code span stays literal; before every other brace rule, none of
+        # which can spell `{{`.
+        # An unterminated `{{` never opens the state and stays the ordinary
+        # text the processor treats it as.
+        rule %r/(\{\{)([ \t]+)((?:"(?:\\.|[^"\\])*"|[^#@}\s"][^#@}\s]*))/ do |m|
+          if closer_ahead?(:include, /[ \t]\}\}/)
+            groups Punctuation, Text, Name::Namespace
+            push :includeparts
+          else
+            token plain_token, m[0]
+          end
+        end
+
+        # The braced families. Each opener consumes only its `{` here, so an
+        # unclosed one leaves the character after it to the rules below, and
+        # its closer must be on the line - looked up in a per-line cache, so
+        # a run of unclosed openers stays linear.
+        #
+        # CriticMarkup substitution and forced strike share `{~`; the first of
+        # `~>` and `~}` decides which one it is.
+        # A CriticMarkup comment. Without its closer, `{#id}` is an attribute
+        # block.
+        # The scanner's match is read before #check replaces it.
+        rule %r/\{(?=\#)/ do |m|
+          brace = m[0]
+          if closer_ahead?(:criticcomment, /\#\}/, @current_stream.charpos + 1)
+            enter_braced(:criticcomment)
+          elsif (tail = @current_stream.check(ATTRS_TAIL))
+            token Name::Attribute, brace
+            consume_as(Name::Attribute, tail)
+          else
+            token plain_token, brace
+          end
+        end
+
+        # The FORCED emphasis family and the other braced inlines. Braces make
+        # a delimiter apply where the bare form would not - `my{_path_}name`
+        # is underline inside a word - so the content is emphasis and the
+        # braces are its delimiters, not an attribute block. Sup and sub are
+        # braced-only in Carve: a bare `^x^` or `,x,` is literal text.
+        BRACED.each do |char, (_, name)|
+          delimiter = Regexp.escape(char)
+          rule %r/\{(?=#{delimiter}(?!#{delimiter}\}))/ do
+            if closer_ahead?(name, /#{delimiter}\}/, @current_stream.charpos + 2)
+              enter_braced(name)
+            else
+              token plain_token
+            end
+          end
+        end
+        rule %r/\{(?=>>)/ do
+          if closer_ahead?(:criticnote, /<<\}/, @current_stream.charpos + 3)
+            enter_braced(:criticnote, 2)
+          else
+            token plain_token
+          end
+        end
+        rule %r/\{(?=%)/ do
+          if closer_ahead?(:bracedcomment, /%\}/, @current_stream.charpos + 1)
+            token Comment::Preproc
+            push :bracedcomment
+            push :preprocchar
+          else
+            token plain_token
+          end
+        end
+
+        # An inline footnote carries content; a reference carries a label.
+        # Both bracketed bodies need a closing `]` before the paragraph ends;
+        # an opener without one is text, as it is in the engine.
+        rule %r/\^\[/ do
+          if (scope = bracket_ahead?)
+            token Punctuation
+            push :"inlinefootnote_#{scope}"
+          else
+            token plain_token
+          end
+        end
+        rule %r/(\[\^)([^\[\]\n]+)(\])/ do
+          groups Punctuation, Name::Label, Punctuation
+        end
+
+        # A citation before a link: both open with `[`, and `[@key]` or
+        # `[+@key]` would otherwise be read as a link label.
+        rule %r/(\[)(\+?@[^\[\]\n]+)(\])/ do
+          groups Punctuation, Name::Variable, Punctuation
+        end
+
+        # Image, then link, then a bare span. All three share the `[...]` shape
+        # and differ only in the prefix and what follows.
+        rule %r/(!#{LABEL})(\()([^)\n]*)(\))/ do
+          groups Str::Other, Punctuation, Name::Tag, Punctuation
+        end
+        rule %r/(!#{LABEL})(#{LABEL})/ do
+          groups Str::Other, Name::Label
+        end
+        rule %r/(#{LABEL})(\()([^)\n]*)(\))/ do
+          groups Name::Entity, Punctuation, Name::Tag, Punctuation
+        end
+        rule %r/(#{LABEL})(#{LABEL})/ do
+          groups Name::Entity, Name::Label
+        end
+        rule %r/#{LABEL}(?=#{ATTRS})/, Name::Entity
+
+        # A cross-reference to a heading id.
+        rule %r/(<\/)(\#[\w-]+)(>)/ do
+          groups Punctuation, Name::Namespace, Punctuation
+        end
+        # An autolink.
+        rule %r/(<)([a-zA-Z][\w+.-]*:[^>\s]+|[^>\s@]+@[^>\s]+)(>)/ do
+          groups Punctuation, Name::Tag, Punctuation
+        end
+
+        # The `:name[...]` extension form.
+        rule %r/(:)([a-zA-Z][\w-]*)(\[)/ do
+          if (scope = bracket_ahead?)
+            groups Punctuation, Name::Function, Punctuation
+            push :"rolebody_#{scope}"
+          else
+            token plain_token
+          end
+        end
+
+        # A code callout marker, and a symbol shortcode - whose name may start
+        # with a sign, as in `:+1:`.
+        rule %r/<\d+>/, Name::Constant
+        rule %r/(?<![\w:]):[\w+-]+:(?![\w:])/, Name::Constant
+
+        # An attribute block attached to the construct before it.
+        rule ATTRS, Name::Attribute
+
+        # Bare emphasis delimiters, Carve's / * _ ~ = set. Whether one opens is
+        # decided in #open_bare, from the characters on both sides and from
+        # whether a closer follows on the line; what it encloses is lexed as
+        # inline content. `==>` is left whole for the typographic rule.
+        rule %r/[*\/]/ do |m|
+          open_bare(m[0])
+        end
+
+        # A mention and a tag, each one token: the sigil is part of the name
+        # rather than punctuation beside it.
+        rule %r/(?<![\w\/])@(?=[\w.-]*?[A-Za-z])[\w][\w.-]*/, Name::Variable::Magic
+        rule %r/(?<![\w&])\#(?=[\w-]*?[A-Za-z])[\w][\w-]*/, Name::Variable::Instance
+
+        # Typographic runs, longest first: an arrow is not an en dash plus a
+        # stray angle bracket, and `---` is not `--` plus `-`.
+        rule %r/<-->|<--(?!-)|(?<!-)-->|<=>|==>|<==/, Operator
+        rule %r/(?<!-)---(?!-)|(?<!-)--(?!-)/, Punctuation
+        rule %r/\.\.\./, Punctuation
+      end
+
+      # The tail of an include directive: its selector, option slots, and
+      # anything else written there. Scoped BY PART - the opener rule is what
+      # keeps the tag and mention rules out, so painting one token buys nothing,
+      # and a reader wants the path to look like a path.
+      #
+      # A part that is neither a section nor an option stays plain text rather
+      # than being refused, matching the processor, which leaves a malformed
+      # directive alone. A newline pops: the directive requires its closer on
+      # the same line, so anything else is not one.
+      state :includeparts do
+        rule %r/[ \t]+/, Text
+        rule %r/\}\}/, Punctuation, :pop!
+        rule %r/#[A-Za-z0-9_][\w-]*/, Name::Label
+        rule %r/(@[A-Za-z_][\w-]*)(:)([^\s}]+)/ do
+          groups Name::Attribute, Punctuation, Literal
+        end
+        rule %r/[^\s}]+/, Text
+        rule %r/\}/, Text
+        rule %r/\n/, Text, :pop!
+      end
+
+      # The body of a bare emphasis run. A same-kind delimiter that cannot
+      # close is content (`*a *b* c*` closes at `b*`), and the run ends with
+      # its line in case a construct inside took the closer the opener saw.
+      #
+      # NO LOOKBEHIND IN A RULE. Rouge before 5 scans without a fixed anchor,
+      # so a lookbehind cannot see what precedes the scan position; the
+      # character before a closer is read in #close_bare instead.
+      BARE.each do |char, (name, _, _, _)|
+        state name do
+          rule(%r/#{Regexp.escape(char)}(?![\p{L}\p{N}])/) { close_bare(/\s/) }
+          rule(/$/) { pop! }
+          rule(/#{Regexp.escape(char)}/) { token plain_token }
+          mixin :inlinecontent
+          rule(PLAIN) { token plain_token }
+          rule(/./) { token plain_token }
+        end
+      end
+
+      # Bold italic in one delimiter pair, in both nesting orders. Its own
+      # delimiters inside it are content unless they close it.
+      # A comment inside it ends at its closer.
+      {
+        bolditalic: ['\*\/', /\s/, '(?<=\S)\*\/'],
+        italicbold: ['\/\*(?!\w)', /[\s*]/, '(?<![\s*])\/\*(?!\w)']
+      }.each do |name, (closer, refused_before, closer_in_line)|
+        state name do
+          rule(/#{closer}/) { close_bare(refused_before) }
+          rule(/$/) { pop! }
+          rule %r/(%%)((?:(?!#{closer_in_line})[^\n])*)/ do
+            groups Comment::Preproc, Comment
+          end
+          rule(%r/[*\/]/) { token plain_token }
+          mixin :inlinecontent
+          rule(PLAIN) { token plain_token }
+          rule(/./) { token plain_token }
+        end
+      end
+
+      # The rest of an opener whose `{` was already emitted.
+      state :punctchar do
+        rule(/[^\n]/) { token Punctuation; pop! }
+      end
+      state :preprocchar do
+        rule(/[^\n]/) { token Comment::Preproc; pop! }
+      end
+
+      # Braced bodies, flat up to their closer.
+      BRACED.each do |char, (tok, name)|
+        closer = /#{Regexp.escape(char)}\}/
+        state name do
+          rule closer, Punctuation, :pop!
+          rule(/$/) { pop! }
+          rule %r/(?:(?!#{closer})[^\n])+/, tok
+        end
+      end
+
+      state :tildebrace do
+        rule %r/~>/, Operator, :tildenew
+        rule %r/~\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!~[>}])[^\n])+/, Generic::Deleted
+      end
+
+      # The new side of a substitution. Its closer ends the whole construct.
+      state :tildenew do
+        rule(/~\}/) { token Punctuation; pop!(2) }
+        rule(/$/) { pop!(2) }
+        rule %r/(?:(?!~\})[^\n])+/, Generic::Inserted
+      end
+
+      state :criticcomment do
+        rule %r/\#\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!\#\})[^\n])+/, Comment
+      end
+
+      state :criticnote do
+        rule %r/<<\}/, Punctuation, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!<<\})[^\n])+/, Comment
+      end
+
+      state :bracedcomment do
+        rule %r/%\}/, Comment::Preproc, :pop!
+        rule(/$/) { pop! }
+        rule %r/(?:(?!%\})[^\n])+/, Comment
+      end
+
+      # Both bodies end at their bracket, or where their block ends when a
+      # construct inside consumed the bracket the opener saw. The newline is
+      # left to the block, which decides what the next line opens.
+      { inlinefootnote: Generic::Emph, rolebody: Name::Function }.each do |body, tok|
+        BODY_ENDS.each do |scope, ends|
+          state :"#{body}_#{scope}" do
+            rule %r/\]/, Punctuation, :pop!
+            rule(%r/(?=#{ends.source}|\n?\z)/) { pop! }
+            mixin :inlinecontent
+            rule PLAIN_NO_BRACKET, tok
+            rule %r/[^\]\n]/, tok
+            rule %r/\n/, Text
+          end
+        end
+      end
+
+      # The lexer states cannot carry the open containers' marker columns, so
+      # the `+` scope is settled afterwards from a document-level pass: a `+`
+      # it names is the continuation operator, every other `+` the states
+      # gave Operator is text.
+      def stream_tokens(str, &block)
+        super(str, &block)
+      end
+
+      private
+
+      def retag_plus(tok, val, pos, markers, candidates)
+        run = +''
+        val.each_char.with_index do |ch, i|
+          scope = if ch != '+' || !candidates[pos + i] || opaque?(tok) then tok
+                  elsif markers[pos + i] then Operator
+                  elsif tok == Operator then Text
+                  else tok
+                  end
+          if scope != tok
+            yield tok, run unless run.empty?
+            run = +''
+            yield scope, ch
+          else
+            run << ch
+          end
+        end
+        yield tok, run unless run.empty?
+      end
+
+      # Comment and literal payloads keep their scope.
+      def opaque?(tok)
+        tok <= Comment || tok <= Literal
+      end
+
+      # The token a state gives a character that opens nothing.
+      PLAIN_TOKENS = {
+        heading: Generic::Heading, quoteline: Generic::Emph,
+        caption: Generic::Subheading, dlterm: Generic::Heading, bolditalic: Generic::Strong,
+        italicbold: Generic::Strong
+      }.merge(BARE.values.to_h { |name, tok, _, _| [name, tok] })
+        .merge(BODY_ENDS.keys.flat_map do |scope|
+          [[:"inlinefootnote_#{scope}", Generic::Emph], [:"rolebody_#{scope}", Name::Function]]
+        end.to_h).freeze
+
+      # Italic or underline inside strong, or the reverse, reads as strong,
+      # the token the combined delimiters have always had.
+      def plain_token
+        name = state.name
+        if %i[emph underline].include?(name) && in_state?(:strong)
+          Generic::Strong
+        else
+          PLAIN_TOKENS.fetch(name, Text)
+        end
+      end
+
+      # Decide whether the bare delimiter +char+, just consumed, opens a run.
+      # It opens when the characters around it allow it and a closer follows
+      # on its line; otherwise it is plain text. `/*` and `*/` open bold
+      # italic first, with the engine's guards for each order.
+      def open_bare(char)
+        text = @current_stream.string
+        pos = @current_stream.charpos
+        before = pos > 1 ? text[pos - 2] : nil
+        before = nil if before == "\n"
+        after = text[pos]
+        name, _, refused_before, refused_after = BARE[char]
+
+        limit = enclosing_closer(pos)
+
+        if after && !after.match?(refused_after) && !(before && before.match?(refused_before)) &&
+           closer_ahead?(name, BARE_CLOSERS[name], pos, masked: :bare, before: limit)
+          token Punctuation
+          return push(name)
+        end
+
+        token plain_token
+      end
+
+      BARE_CLOSERS = BARE.to_h do |char, (name, _, _, _)|
+        [name, %r/(?<=\S)#{Regexp.escape(char)}(?![\p{L}\p{N}])/]
+      end.freeze
+      COMBINED_CLOSERS = {
+        bolditalic: %r/(?<=\S)\*\//, italicbold: %r/(?<![\s*])\/\*(?!\w)/
+      }.freeze
+
+      # Where the run the scanner is in closes, if it is in one: a run opened
+      # inside it must close first, so `*a /b* c/` is strong `a /b`.
+      def enclosing_closer(pos)
+        name = state.name
+        if BARE_CLOSERS.key?(name)
+          closer_at(name, BARE_CLOSERS[name], pos, masked: :bare)
+        elsif COMBINED_CLOSERS.key?(name)
+          closer_at(name, COMBINED_CLOSERS[name], pos, masked: :combined)
+        end
+      end
+
+      # A closer candidate inside a bare run, just consumed: it closes unless
+      # the character before it is one +refused_before+ matches.
+      def close_bare(refused_before)
+        text = @current_stream.string
+        at = @current_stream.charpos - @current_stream[0].length
+        if at.positive? && !text[at - 1].match?(refused_before)
+          token Punctuation
+          pop!
+        else
+          token plain_token
+        end
+      end
+
+      # Emit the `{` of a braced opener and enter +name+, whose remaining
+      # opener characters come next.
+      def enter_braced(name, rest = 1)
+        token Punctuation
+        push name
+        rest.times { push :punctchar }
+      end
+
+      # Emit the next +text+ of the input as one +tok+ token.
+      def consume_as(tok, text)
+        literal = Regexp.new(Regexp.escape(text))
+        push do
+          rule(literal) { token tok; pop! }
+        end
+      end
+
+      # Whether +pattern+ matches on the current line at or after +from+.
+      # The matches of one line are found once per pattern and reused, which
+      # keeps a line full of unclosed openers linear instead of quadratic.
+      # A masked line hides what a bare closer cannot reach into: escapes,
+      # code spans, braced inlines, link destinations and autolinks. A bare
+      # run's line also ends at a trailing comment, which takes its closer.
+      def closer_ahead?(key, pattern, from = @current_stream.charpos, masked: nil, before: nil)
+        at = closer_at(key, pattern, from, masked: masked)
+        !at.nil? && (before.nil? || at < before)
+      end
+
+      # The position of the first match of +pattern+ on the current line at or
+      # after +from+, or nil.
+      def closer_at(key, pattern, from = @current_stream.charpos, masked: nil)
+        stream = @current_stream
+        unless @closers_for.equal?(stream)
+          @closers_for = stream
+          @closers = {}
+        end
+        pos = stream.charpos
+        entry = @closers[key]
+        unless entry && pos >= entry[0] && pos <= entry[1]
+          text = stream.string
+          first = pos.zero? ? 0 : (text.rindex("\n", pos - 1) || -1) + 1
+          last = text.index("\n", pos) || text.length
+          line = text[first...last]
+          line = mask_opaque(line) if masked
+          line = line[0...line.index('%%')] if masked == :bare && line.include?('%%')
+          hits = []
+          line.scan(pattern) { hits << first + Regexp.last_match.begin(0) }
+          entry = @closers[key] = [first, last, hits]
+        end
+        entry[2].bsearch { |at| at >= from }
+      end
+
+      OPAQUE = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]\([^)\n]*\)|<[^<>\s]+>/.freeze
+
+      def mask_opaque(line)
+        line = line.gsub(OPAQUE) { |span| "\u0001" * span.length }
+        # Braced inlines pair up in code: a regex scanning from every unclosed
+        # `{*` to the end of the line is quadratic. Once a kind has no closer
+        # left, no later opener of that kind can have one either.
+        '*/_^,=+~#%-'.each_char do |kind|
+          at = 0
+          while (open = line.index("{#{kind}", at))
+            close = line.index("#{kind}}", open + 3)
+            break unless close
+
+            line[open...close + 2] = "\u0001" * (close + 2 - open)
+            at = close + 2
+          end
+        end
+        line
+      end
+
+      # The scope of the block a bracketed body opens in, when a `]` outside
+      # escapes and code spans follows before that block ends; nil otherwise.
+      # The brackets of one block are found in one pass and reused, so a run
+      # of unclosed openers does not rescan it once each.
+      def bracket_ahead?
+        stream = @current_stream
+        pos = stream.charpos
+        scope = body_scope
+        @brackets = {} unless @brackets_for.equal?(stream)
+        @brackets_for = stream
+        entry = @brackets[scope]
+        unless entry && pos < entry[0]
+          text = stream.string
+          last = body_end(text, pos, scope)
+          hits = []
+          text[pos...last].scan(BRACKET_SCAN) { hits << pos + $~.begin(0) if $~[0] == ']' }
+          entry = @brackets[scope] = [last, hits]
+        end
+        entry[1].bsearch { |at| at >= pos } ? scope : nil
+      end
+
+      # Where a body opened at +pos+ must end: the first block end after it.
+      def body_end(text, pos, scope)
+        ends = BODY_ENDS[scope]
+        text.index(ends, pos) || text.length
+      end
+
+      BRACKET_SCAN = /\\.|(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)|\]/.freeze
+
+      # The scope of the nearest enclosing block state. An indented paragraph
+      # sits in a container, so the next list marker ends it as it ends an item.
+      def body_scope
+        stack.reverse_each do |s|
+          scope = BODY_SCOPE[s.name]
+          next unless scope
+          return :item if scope == :para && @indented
+
+          return scope
+        end
+        :para
+      end
+
+      # Whether +closer+ matches a line below the current position. A miss
+      # is remembered per +key+, because every later opener of the same kind
+      # would miss too - without that, a run of unclosed openers rescans the
+      # rest of the document once each.
+      def closer_below?(closer, key, from = @current_stream.charpos)
+        stream = @current_stream
+        @closer_misses = {} unless @closer_misses_for.equal?(stream)
+        @closer_misses_for = stream
+        return false if @closer_misses[key]
+
+        found = stream.string.index(closer, from)
+        @closer_misses[key] = true unless found
+        !found.nil?
+      end
+
+      # Enter the state of a block whose opener just matched, or none for an
+      # opener that is a single token. After a blockquote marker the opener
+      # replaces the quote's start state, and a single-token opener hands the
+      # rest of the line to quoted text.
+      def open_block(name = nil, quoted = name || :quoteline, host: nil)
+        kind = host || (name == :listitem ? :list : name == :quoteline ? :quote : nil)
+        remember_host(kind) if kind
+        if state?(:quotestart)
+          goto quoted
+        elsif name
+          push name
+        end
+      end
+
+      def remember_host(kind)
+        @host_stream = @current_stream
+        @last_host_pos = @current_stream.pos
+        @last_host_kind = kind
+        if kind == :term
+          @term_stream = @current_stream
+          @term_pos = @last_host_pos
+          @term_quote_depth = state?(:quotestart) ? quote_depth_on_line : 0
+        elsif kind != :quote
+          @term_pos = nil
+        end
+        @host_scan = StringScanner.new(@current_stream.string)
+        @host_scan.pos = @last_host_pos
+        @host_scan.scan(/[^\n]*\n/)
+        @host_scan_valid = true
+        @host_scan_fence = nil
+        @host_scan_previous = nil
+      end
+
+      def quote_depth_on_line
+        line_start = line_start_byte
+        @quote_line_start == line_start ? @quote_depth_current : 0
+      end
+
+      def record_quote_depth(depth)
+        @quote_line_start = line_start_byte
+        @quote_depth_current = depth
+      end
+
+      def line_start_byte
+        text = @current_stream.string
+        pos = @current_stream.pos
+        pos -= 1 while pos.positive? && text.getbyte(pos - 1) != 10
+        pos
+      end
+
+      def next_line_after_current
+        scan = StringScanner.new(@current_stream.string)
+        scan.pos = @current_stream.pos
+        return nil unless scan.scan(/[^\n]*\n/)
+
+        scan.scan(/[^\n]*/)
+      end
+
+      def quote_level_follows?(depth)
+        line = next_line_after_current
+        return false unless line
+        depth.times do
+          return false unless line.start_with?('> ')
+
+          line = line[2..]
+        end
+        !line.empty? && !line.match?(/\A[ \t]/)
+      end
+
+      def continuation_host_before?
+        return false unless @host_stream.equal?(@current_stream) && @last_host_pos
+        return false if @last_host_kind == :term
+        return false if @last_host_kind == :quote && !quote_block_follows?
+
+        return false unless @host_scan_valid
+
+        limit = @current_stream.pos
+        while (line = @host_scan.check(/[^\n]*\n/))
+          break if @host_scan.pos + line.bytesize > limit
+
+          @host_scan.scan(/[^\n]*\n/)
+          line = line.chomp("\n")
+          if @host_scan_fence
+            fence = @host_scan_fence
+            @host_scan_fence = nil if line.match?(/\A#{Regexp.escape(fence)}[#{Regexp.escape(fence[0])}]*[ \t]*\z/)
+          elsif line.match?(/\A[ \t]*\z/)
+            @host_scan_valid = false
+          elsif (opening = line.match(/\A(`{3,}|~{3,})/))
+            @host_scan_valid = false unless @host_scan_previous&.match?(/\A\+[ \t]*\z/)
+            @host_scan_fence = opening[1]
+          elsif line.match?(/\A(?:\#{1,6} +|::{1,}|\^ +|\||(?:[-*_][ \t]*){3,}|\[[^\]]+\]: )/)
+            @host_scan_valid = false unless @host_scan_previous&.match?(/\A\+[ \t]*\z/)
+          end
+          @host_scan_previous = line
+          return false unless @host_scan_valid
+        end
+        true
+      end
+
+      def definition_term_before?
+        return false unless @term_stream.equal?(@current_stream) && @term_pos
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        return false unless depth == @term_quote_depth
+
+        between = @current_stream.string.byteslice(@term_pos...@current_stream.pos)
+        lines = between.split("\n", -1)
+        lines.shift
+        lines.pop
+        if depth.positive?
+          prefix = '> ' * depth
+          return false unless lines.all? { |line| line.empty? || line.start_with?(prefix) }
+
+          lines.map! { |line| line.empty? ? line : line[prefix.length..] }
+        end
+        # A term is one line (carve#4894): only a blank may stand between it
+        # and its `: ` line.
+        lines.size <= 1 && lines.all? { |line| line.match?(/\A[ \t]*\z/) }
+      end
+
+      # A `:` left of the `::` column of every open term above it ends the
+      # definition list and is paragraph text (markup-carve/carve#3458).
+      def separator_below_term?
+        text = @current_stream.string
+        unless @separator_source.equal?(text)
+          @separator_source = text
+          @separator_bytes = text.b
+          @separator_below = {}
+        end
+        start = line_start_byte
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        strip = lambda do |line|
+          depth.times { line = line.start_with?('> ') ? line[2..] : line.sub(/\A>\z/, '') }
+          line
+        end
+        indent = ->(line) { line[/\A[ \t]*/].gsub("\t", '    ').length }
+        column = indent.call(strip.call(text.byteslice(start...(@separator_bytes.index("\n", start) || text.bytesize))))
+        term = nil
+        below = nil
+        finish = start - 1
+        while finish.positive?
+          from = (@separator_bytes.rindex("\n", finish - 1) || -1) + 1
+          line = strip.call(text.byteslice(from...finish))
+          finish = from - 1
+          next if line.strip.empty?
+
+          if line.match?(/\A[ \t]*::[ \t]/)
+            term = [term, indent.call(line)].compact.min
+            break if term <= column
+          elsif line.match?(/\A[ \t]*:[ \t]/)
+            # An earlier separator at this column with no term between reads the same.
+            if term.nil? && indent.call(line) == column && @separator_below.key?(from)
+              below = @separator_below[from]
+              break
+            end
+          elsif term && indent.call(line) < term
+            break
+          end
+        end
+        below = !term.nil? && column < term if below.nil?
+        @separator_below[start] = below
+      end
+
+      # After a definition, only a heading, quote, table or div ends the list.
+      def definition_before?
+        return false unless @def_stream.equal?(@current_stream) && @def_pos
+        depth = state?(:quotestart) ? quote_depth_on_line : 0
+        return false unless depth == @def_quote_depth
+
+        lines = @current_stream.string.byteslice(@def_pos...@current_stream.pos).split("\n", -1)
+        lines.shift
+        lines.pop
+        prefix = '> ' * depth
+        blank = false
+        lines.all? do |line|
+          if line.empty? || line == prefix.rstrip
+            blank = true
+            next true
+          end
+          next false unless line.start_with?(prefix)
+
+          rest = line[prefix.length..]
+          # a flush-left block after a blank line, or one that interrupts, ends it
+          next false if blank && rest.match?(/\A[^ \t]/)
+
+          blank = false
+          !rest.match?(/\A(?:\#{1,6} +|:{3,}|> |\||::|`{3,}|~{3,}|(?:[-*_][ \t]*){3,}\z)/)
+        end
+      end
+
+      def quote_block_follows?
+        line = next_line_after_current
+        return false unless line
+        return false if line.empty? || line.match?(/\A[ \t]/)
+
+        while line.start_with?('> ')
+          line = line[2..]
+          return false if line.empty? || line.match?(/\A[ \t]/)
+        end
+        line != '>'
+      end
+
+      def continue_paragraph(name)
+        @lone_image = false
+        goto name
+      end
+
+      # The tokens of a cell marker and its braced alignment block, from a
+      # match whose last five groups are the marker and CELL_BRACE.
+      def braced_cell(m)
+        pipe, open, align, rest, close = m.captures.last(5)
+        token pipe == '|' ? Punctuation : Operator, pipe
+        token Name::Attribute, open
+        token Operator, align
+        token Name::Attribute, rest + close
+      end
+
+      def start_paragraph
+        @lone_image = !@current_stream.check(IMAGE_LINE).nil?
+        @indented = @current_stream.check(/[ \t]/) ? true : false
+        push :paragraph
+      end
+
+      # Lex the tail of a fence or container opener line without leaving the
+      # current state: a quoted title, a bracketed label and an attribute
+      # block, each as its own token.
+      def lex_info_string(text)
+        return if text.nil? || text.empty?
+
+        scanner = StringScanner.new(text)
+        until scanner.eos?
+          if (m = scanner.scan(%r/"[^"\n]*"/))
+            token Str::Double, m
+          elsif (m = scanner.scan(%r/\[[^\]\n]*\]/))
+            token Name::Label, m
+          elsif (m = scanner.scan(ATTRS))
+            token Name::Attribute, m
+          else
+            token Text, scanner.getch
+          end
+        end
+      end
+
+      # Enter a fenced block. The payload is opaque to Carve, so it either goes
+      # to a lexer for the declared language or comes out as one string token.
+      #
+      # The closer must be AT LEAST as long as the opener. A Rouge state cannot
+      # carry the opener's width across rules, so the width is closed over here
+      # instead of approximated - `~~~~` does not close a ```` ``` ```` block,
+      # and a three-backtick line inside a four-backtick fence stays content.
+      def push_fence(opener, language)
+        char = Regexp.escape(opener[0])
+        width = opener.length
+        line_start = (@current_stream.string.rindex("\n", @current_stream.charpos - 1) || -1) + 1
+        margin = @current_stream.string[line_start...@current_stream.charpos][/^[ \t]*/]
+        closer = %r/^#{Regexp.escape(margin)}#{char}{#{width},}[ \t]*$/
+
+        sublexer = fence_lexer(language)
+        sublexer&.reset!
+
+        return push_quoted_fence(char, width, sublexer) if state?(:quotestart)
+
+        push do
+          rule closer, Punctuation, :pop!
+          if sublexer
+            # The opener's own newline, which is not part of the payload and
+            # sits mid-line where the line rule below cannot reach it.
+            rule %r/\n/, Text
+            # WHOLE LINES, never fragments. A delegated lexer carries state
+            # across calls, so handing it a piece of a line at a time makes it
+            # tokenize the pieces rather than the line.
+            rule %r/^.*\n?/ do |m|
+              delegate sublexer, m[0]
+            end
+          else
+            # Carve's own callout marker, which only survives where no
+            # embedded language owns the payload.
+            rule %r/<\d+>/, Name::Constant
+            rule %r/[^\n<]+|<|\n/, Str::Backtick
+          end
+        end
+      end
+
+      # A fence opened after a blockquote marker. Every payload line carries
+      # the quote prefix at the opener's depth, which is markup rather than
+      # payload; a line with fewer markers leaves that quote and so ends the
+      # fence too, while a deeper marker is payload.
+      def push_quoted_fence(char, width, sublexer)
+        pop!
+        text = @current_stream.string
+        pos = @current_stream.charpos
+        line = text[((text.rindex("\n", pos - 1) || -1) + 1)...pos]
+        depth = line[/\A#{QUOTE_PREFIX}/].to_s.count('>')
+        prefix = %r/(?:[ \t]*>(?=[ \t]|$)){#{depth}}[ \t]?/
+
+        push do
+          rule %r/^(#{prefix})([ \t]*#{char}{#{width},})([ \t]*)$/ do
+            groups Punctuation, Punctuation, Text
+            pop!
+          end
+          rule(%r/^(?!#{prefix})/) { pop! }
+          rule %r/^#{prefix}/, Punctuation
+          if sublexer
+            rule %r/\n/, Text
+            rule(%r/[^\n]+\n?/) { |m| delegate sublexer, m[0] }
+          else
+            rule %r/<\d+>/, Name::Constant
+            rule %r/[^\n<]+|<|\n/, Str::Backtick
+          end
+        end
+      end
+
+      # A lexer for the fence's declared language, or nil when there is no
+      # language, none is known, or the name is ambiguous. Guessing is
+      # deliberately not attempted: a wrong guess colours a sample as the wrong
+      # language, which reads worse than leaving it plain.
+      def fence_lexer(language)
+        return nil if language.nil? || language.empty?
+
+        return CsvTable.new if language == 'csv'
+        return TsvTable.new if language == 'tsv'
+
+        Lexer.find_fancy(language)
+      rescue StandardError
+        nil
+      end
+    end
+  end
+end

@@ -3,6 +3,7 @@
 require 'rouge'
 require_relative 'rouge-carve/version'
 require_relative 'rouge/lexers/carve'
+require_relative 'rouge/lexers/carve2'
 
 # A Rouge lexer for the Carve markup language.
 #
