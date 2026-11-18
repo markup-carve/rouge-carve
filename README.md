@@ -15,6 +15,15 @@ require 'rouge-carve'
 Rouge::Lexer.find('carve')
 ```
 
+For Carve 0.2 documents, select the separate lexer:
+
+```ruby
+Rouge::Lexer.find('carve2')
+```
+
+The `crv2` alias selects the same 0.2 lexer. The `carve` and `crv` entries
+continue to use the 0.1 rules.
+
 ## Documentation
 
 - [Carve documentation](https://markup-carve.github.io/carve/)
