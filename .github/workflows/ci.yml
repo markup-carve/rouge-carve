@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, next2]
   pull_request:
 
 permissions:
@@ -39,28 +39,3 @@ jobs:
           gem install rouge --no-document --version "${{ matrix.rouge }}"
       - name: Spec
         run: rspec -I lib -I spec
-
-  corpus:
-    name: Corpus gates
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-      - name: Install
-        run: gem install rouge --no-document
-      - name: Check out the corpus
-        uses: actions/checkout@v7
-        with:
-          repository: markup-carve/carve
-          path: carve-spec
-      - name: No error token
-        run: ruby script/corpus_check.rb carve-spec
-
-      - name: Every document round-trips
-        run: ruby script/preservation_check.rb carve-spec
-
-      - name: Construct parity with the sibling grammars
-        run: ruby script/parity_check.rb

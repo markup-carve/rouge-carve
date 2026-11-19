@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace the 0.1 `carve` lexer with the 0.2 rule graph. Remove the `carve2` and `crv2` registrations and the 0.1 lexer tests.
+
 ## [0.1.5] - 2026-11-12
 
 - Braced cell alignment (`|={>} Price |`, `|={<^ .x} Name |`, `|{~} 1 |`) lexes as an attribute with its alignment run as an operator, like the deprecated `|=>` prefix; cell pipes and escaped pipes stay outside it (#37).

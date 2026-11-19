@@ -2,7 +2,7 @@
 
 require 'spec_helper'
 
-RSpec.describe Rouge::Lexers::Carve2 do
+RSpec.describe Rouge::Lexers::Carve do
   def lex(source)
     described_class.new.lex(source).map { |token, value| [token.qualname, value] }
   end
@@ -71,13 +71,10 @@ RSpec.describe Rouge::Lexers::Carve2 do
     expect(tokens.any? { |name, value| name == 'Generic.Subheading' && value.include?('^ second') }).to be true
   end
 
-  it 'registers a separate grammar and keeps the legacy one' do
-    expect(Rouge::Lexer.find('carve2')).to eq described_class
-    expect(Rouge::Lexer.find('crv2')).to eq described_class
-    expect(Rouge::Lexer.find('carve')).to eq Rouge::Lexers::Carve
+  it 'registers the public Carve grammar' do
+    expect(Rouge::Lexer.find('carve')).to eq described_class
+    expect(Rouge::Lexer.find('crv')).to eq described_class
     expect(lex('_u_').map(&:first)).not_to include 'Generic.Emph'
-    legacy = Rouge::Lexers::Carve.new.lex('_u_').map { |token, _| token.qualname }
-    expect(legacy).to include 'Generic.Emph'
   end
 
   {

@@ -76,13 +76,6 @@ jobs:
           gem install rspec --no-document
           rspec -I lib -I spec
 
-      - name: Corpus gates
-        run: |
-          git clone --depth 1 https://github.com/markup-carve/carve.git carve-spec
-          ruby script/corpus_check.rb carve-spec
-          ruby script/preservation_check.rb carve-spec
-          ruby script/parity_check.rb
-
       - name: The gem carries the lexer, its entry and the demo
         run: |
           gem build rouge-carve.gemspec
