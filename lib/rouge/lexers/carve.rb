@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*- #
 # frozen_string_literal: true
 
-require_relative 'carve_continuation'
 
 module Rouge
   module Lexers
@@ -142,10 +141,6 @@ module Rouge
       # is a word, not a marker, and a letter with `.` needs two spaces, so
       # `J. R. R. Tolkien` is prose (carve#4811).
       ORDERED = "(?:\\d{1,9}[.)]|(?:[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)(?:\\)|\\.(?=(?:#{ATTRS})? )))"
-
-      # The states read a column-0 `+` with a flush-left block below as an
-      # attachment. Whether a `+` is the marker is settled by CarveContinuation.
-      PLUS_NEXT = /(?=\n[^ \t\n])/.freeze
 
       # A list marker at the start of a line, as the list rules below read it.
       LIST_MARKER = "(?:[-*]|#{ORDERED}|\\.)(?:#{ATTRS})?(?:[ \\t]|$)"
@@ -375,7 +370,6 @@ module Rouge
             end
             if m[5]
               token Text, m[4]
-              # CarveContinuation settles whether this `+` is the marker.
               token Text, m[5]
             end
             open_block(:quoteline)
