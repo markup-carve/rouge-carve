@@ -758,7 +758,7 @@ module Rouge
           groups Punctuation, Name::Namespace, Punctuation
         end
         # An autolink.
-        rule %r/(<)([a-zA-Z][\w+.-]*:[^>\s]+|[^>\s@]+@[^>\s]+)(>)/ do
+        rule %r/(<)([a-zA-Z][\w+.-]*:[^<>\s]+|[^<>\s@]+@[^<>\s]+)(>)/ do
           groups Punctuation, Name::Tag, Punctuation
         end
 
