@@ -487,7 +487,7 @@ module Rouge
 
         # A lone snippet use takes no attribute line, so the line above it is
         # a paragraph of its own (carve#6896).
-        rule %r/^#{MARGIN}#{ATTRS}[ \t]*(?=\n#{MARGIN}#{SNIPPET_BLOCK})/, Text
+        rule %r/^#{MARGIN}(?:#{ATTRS})+[ \t]*(?=\n#{MARGIN}#{SNIPPET_BLOCK})/, Text
 
         # A standalone attribute block, which may span lines indented past its
         # `{` (carve#5080). One that does not is a paragraph.

@@ -88,6 +88,7 @@ RSpec.describe Rouge::Lexers::Carve do
     expect(scoped(source, 'Name.Attribute')).to be_empty
     expect(lex(source)).to include(['Text', " X\n\n{.k :en}\n"])
     expect(scoped(source, 'Name.Variable')).to eq ['$v', '$v']
+    expect(scoped("{.a}{.b}\n{{ $v }}\n", 'Name.Attribute')).to be_empty
     # A line holding more than the use is a paragraph, which the line takes.
     expect(scoped("{.k}\n{{ $v }} tail\n", 'Name.Attribute')).to eq ['{.k}']
   end
