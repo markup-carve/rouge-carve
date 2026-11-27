@@ -185,6 +185,17 @@ module Rouge
         #{MARGIN}(?:!#{LABEL}(?:\([^)\n]*\)|#{LABEL})?|\$\$(`+)[^\n]*?\1)(?:#{ATTRS})?[ \t]*$
       /x.freeze
 
+      # Snippets (C2-B-236, C2-B-237, C2-I-128). A use is `{{`, spaces, `$`
+      # and a name, spaces, `}}`; a tab or any other shape is an include or
+      # text. The marker of a definition holds attribute parts but no id.
+      SNIPPET_NAME = '[A-Za-z0-9_][A-Za-z0-9_-]*'
+      SNIPPET_USE = /(\{\{)( +)(\$#{SNIPPET_NAME})( +)(\}\})/.freeze
+      SNIPPET_PART = /(?:\.[A-Za-z0-9_-]+|:(?:[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*)?|[A-Za-z_][A-Za-z0-9_-]*=(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\s"'{}|\\]+)|[A-Za-z][A-Za-z0-9_-]*)/.freeze
+      SNIPPET_GLUED = /\{ *#{SNIPPET_PART}(?: +#{SNIPPET_PART})* *\}/.freeze
+      SNIPPET_DEF = %r/^(\{)(\$#{SNIPPET_NAME})((?: +#{SNIPPET_PART})* *)(\})((?:#{SNIPPET_GLUED})*)(:)( )(?=[ \t]*[^ \t\n])/.freeze
+      # A use alone on its line, which is a block of its own.
+      SNIPPET_BLOCK = /#{SNIPPET_USE}(?=[ \t]*$)/.freeze
+
       # The braced inline families: delimiter, content token, state.
       BRACED = {
         '*' => [Generic::Strong, :forcedstrong], '/' => [Generic::Emph, :forcedemph],
@@ -455,6 +466,29 @@ module Rouge
 
         mixin :blockopeners
 
+        # A snippet definition is a one-line block at column 0. Inside a `:::`
+        # div it is text, which a per-line rule cannot see.
+        rule SNIPPET_DEF do |m|
+          token Punctuation, m[1]
+          token Name::Variable, m[2]
+          token Name::Attribute, m[3] unless m[3].empty?
+          token Punctuation, m[4]
+          token Name::Attribute, m[5] unless m[5].empty?
+          token Punctuation, m[6]
+          token Text, m[7]
+          push :defline
+        end
+
+        # A use alone on its line is a block of one line, so the line below
+        # starts a new block.
+        rule %r/^(#{MARGIN})#{SNIPPET_BLOCK}/ do
+          groups Text, Punctuation, Text, Name::Variable, Text, Punctuation
+        end
+
+        # A lone snippet use takes no attribute line, so the line above it is
+        # a paragraph of its own (carve#6896).
+        rule %r/^#{MARGIN}#{ATTRS}[ \t]*(?=\n#{MARGIN}#{SNIPPET_BLOCK})/, Text
+
         # A standalone attribute block, which may span lines indented past its
         # `{` (carve#5080). One that does not is a paragraph.
         rule %r/^(#{MARGIN})(#{ATTRS})(?=[ \t]*\n(?![ \t]*\n)[ \t]*\S)/ do
@@ -638,6 +672,13 @@ module Rouge
         end
         rule %r/(`+)([^\n]*?)(\1)/ do
           groups Punctuation, Str::Backtick, Punctuation
+        end
+
+        # A snippet use, before the include directive, which would read its
+        # name as a path. Attribute blocks glued to it are text (C2-I-128).
+        rule %r/#{SNIPPET_USE}((?:#{ATTRS})*)/ do |m|
+          groups Punctuation, Text, Name::Variable, Text, Punctuation
+          token plain_token, m[6] unless m[6].empty?
         end
 
         # The reserved include directive `{{ path #section @key:value }}`
