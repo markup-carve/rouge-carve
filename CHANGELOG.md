@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+The `carve` lexer highlights Carve 0.2 syntax.
+
 ### Breaking
 
-- Replace the 0.1 `carve` lexer with the 0.2 rule graph. Remove the `carve2` and `crv2` registrations and the 0.1 lexer tests.
+- Replace the 0.1 `carve` lexer with the 0.2 rule graph. `carve` and `crv` (`*.crv`, `*.carve`) now highlight Carve 0.2 syntax (#40, #41).
 
 ## [0.1.5] - 2026-11-12
 
